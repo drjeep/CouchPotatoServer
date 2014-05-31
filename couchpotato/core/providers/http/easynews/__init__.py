@@ -9,9 +9,8 @@ config = [{
     'groups': [
         {
             'tab': 'searcher',
-            'subtab': 'http_providers',
-            'name': 'easynews',
-            'label': 'Easynews',
+            'list': 'http_providers',
+            'name': 'Easynews',
             'description': 'Easynews global search',
             'wizard': True,
             'options': [
