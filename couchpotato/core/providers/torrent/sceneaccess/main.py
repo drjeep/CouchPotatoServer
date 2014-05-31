@@ -12,9 +12,10 @@ class SceneAccess(TorrentProvider):
 
     urls = {
         'test': 'https://www.sceneaccess.eu/',
-        'login' : 'https://www.sceneaccess.eu/login',
+        'login': 'https://www.sceneaccess.eu/login',
+        'login_check': 'https://www.sceneaccess.eu/inbox',
         'detail': 'https://www.sceneaccess.eu/details?id=%s',
-        'search': 'https://www.sceneaccess.eu/browse?method=2&c%d=%d',
+        'search': 'https://www.sceneaccess.eu/browse?c%d=%d',
         'download': 'https://www.sceneaccess.eu/%s',
     }
 
@@ -24,26 +25,27 @@ class SceneAccess(TorrentProvider):
         ([8], ['dvdr']),
     ]
 
-    http_time_between_calls = 1 #seconds
+    http_time_between_calls = 1  #seconds
 
     def _search(self, movie, quality, results):
 
+        cat = self.getCatId(quality['identifier'])
+        if not cat:
+            return
+
         url = self.urls['search'] % (
-           self.getCatId(quality['identifier'])[0],
-           self.getCatId(quality['identifier'])[0]
+           cat[0],
+           cat[0]
         )
 
         arguments = tryUrlencode({
             'search': movie['library']['identifier'],
-            'method': 1,
+            'method': 3,
         })
         url = "%s&%s" % (url, arguments)
 
-        # Do login for the cookies
-        if not self.login_opener and not self.login():
-            return
 
-        data = self.getHTMLData(url, opener = self.login_opener)
+        data = self.getHTMLData(url)
 
         if data:
             html = BeautifulSoup(data)
@@ -69,7 +71,6 @@ class SceneAccess(TorrentProvider):
                         'size': self.parseSize(result.find('td', attrs = {'class' : 'ttr_size'}).contents[0]),
                         'seeders': tryInt(result.find('td', attrs = {'class' : 'ttr_seeders'}).find('a').string),
                         'leechers': tryInt(leechers.string) if leechers else 0,
-                        'download': self.loginDownload,
                         'get_more_info': self.getMoreInfo,
                     })
 
@@ -77,11 +78,11 @@ class SceneAccess(TorrentProvider):
                 log.error('Failed getting results from %s: %s', (self.getName(), traceback.format_exc()))
 
     def getLoginParams(self):
-        return tryUrlencode({
+        return {
             'username': self.conf('username'),
             'password': self.conf('password'),
             'submit': 'come on in',
-        })
+        }
 
     def getMoreInfo(self, item):
         full_description = self.getCache('sceneaccess.%s' % item['id'], item['detail_url'], cache_timeout = 25920000)
@@ -91,3 +92,8 @@ class SceneAccess(TorrentProvider):
 
         item['description'] = description
         return item
+
+    def loginSuccess(self, output):
+        return '/inbox' in output.lower()
+
+    loginCheckSuccess = loginSuccess

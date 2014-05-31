@@ -83,7 +83,6 @@ import twisted.names.resolve
 
 from zope.interface import implementer
 
-from tornado.concurrent import return_future
 from tornado.escape import utf8
 from tornado import gen
 import tornado.ioloop
@@ -457,6 +456,7 @@ class TwistedIOLoop(tornado.ioloop.IOLoop):
         del self.fds[fd]
 
     def start(self):
+        self._setup_logging()
         self.reactor.run()
 
     def stop(self):
@@ -528,8 +528,10 @@ class TwistedResolver(Resolver):
             resolved_family = socket.AF_INET6
         else:
             deferred = self.resolver.getHostByName(utf8(host))
-            resolved = yield gen.Task(deferred.addCallback)
-            if twisted.internet.abstract.isIPAddress(resolved):
+            resolved = yield gen.Task(deferred.addBoth)
+            if isinstance(resolved, failure.Failure):
+                resolved.raiseException()
+            elif twisted.internet.abstract.isIPAddress(resolved):
                 resolved_family = socket.AF_INET
             elif twisted.internet.abstract.isIPv6Address(resolved):
                 resolved_family = socket.AF_INET6

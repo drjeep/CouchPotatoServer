@@ -1,20 +1,23 @@
 from argparse import ArgumentParser
-from couchpotato import web
-from couchpotato.api import api, NonBlockHandler
+from cache import FileSystemCache
+from couchpotato import KeyHandler, LoginHandler, LogoutHandler
+from couchpotato.api import NonBlockHandler, ApiHandler
 from couchpotato.core.event import fireEventAsync, fireEvent
+from couchpotato.core.helpers.encoding import toUnicode
 from couchpotato.core.helpers.variable import getDataDir, tryInt
 from logging import handlers
 from tornado.httpserver import HTTPServer
-from tornado.web import Application, FallbackHandler
-from tornado.wsgi import WSGIContainer
-from werkzeug.contrib.cache import FileSystemCache
+from tornado.web import Application, StaticFileHandler, RedirectHandler
+from uuid import uuid4
 import locale
 import logging
 import os.path
 import shutil
 import sys
 import time
+import traceback
 import warnings
+
 
 def getOptions(base_path, args):
 
@@ -50,6 +53,7 @@ def getOptions(base_path, args):
 
     return options
 
+
 # Tornado monkey patch logging..
 def _log(status_code, request):
 
@@ -75,46 +79,57 @@ def runCouchPotato(options, base_path, args, data_dir = None, log_dir = None, En
     if not encoding or encoding in ('ANSI_X3.4-1968', 'US-ASCII', 'ASCII'):
         encoding = 'UTF-8'
 
+    Env.set('encoding', encoding)
+
     # Do db stuff
-    db_path = os.path.join(data_dir, 'couchpotato.db')
+    db_path = toUnicode(os.path.join(data_dir, 'couchpotato.db'))
 
     # Backup before start and cleanup old databases
-    new_backup = os.path.join(data_dir, 'db_backup', str(int(time.time())))
-
-    # Create path and copy
+    new_backup = toUnicode(os.path.join(data_dir, 'db_backup', str(int(time.time()))))
     if not os.path.isdir(new_backup): os.makedirs(new_backup)
-    src_files = [options.config_file, db_path, db_path + '-shm', db_path + '-wal']
-    for src_file in src_files:
-        if os.path.isfile(src_file):
-            shutil.copy2(src_file, os.path.join(new_backup, os.path.basename(src_file)))
 
     # Remove older backups, keep backups 3 days or at least 3
     backups = []
     for directory in os.listdir(os.path.dirname(new_backup)):
-        backup = os.path.join(os.path.dirname(new_backup), directory)
+        backup = toUnicode(os.path.join(os.path.dirname(new_backup), directory))
         if os.path.isdir(backup):
             backups.append(backup)
+
+    latest_backup = tryInt(os.path.basename(sorted(backups)[-1])) if len(backups) > 0 else 0
+    if latest_backup < time.time() - 3600:
+        # Create path and copy
+        src_files = [options.config_file, db_path, db_path + '-shm', db_path + '-wal']
+        for src_file in src_files:
+            if os.path.isfile(src_file):
+                dst_file = toUnicode(os.path.join(new_backup, os.path.basename(src_file)))
+                shutil.copyfile(src_file, dst_file)
+
+                # Try and copy stats seperately
+                try: shutil.copystat(src_file, dst_file)
+                except: pass
 
     total_backups = len(backups)
     for backup in backups:
         if total_backups > 3:
             if tryInt(os.path.basename(backup)) < time.time() - 259200:
-                for src_file in src_files:
-                    b_file = os.path.join(backup, os.path.basename(src_file))
-                    if os.path.isfile(b_file):
-                        os.remove(b_file)
+                for the_file in os.listdir(backup):
+                    file_path = os.path.join(backup, the_file)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                    except:
+                        raise
+
                 os.rmdir(backup)
                 total_backups -= 1
 
-
     # Register environment settings
-    Env.set('encoding', encoding)
-    Env.set('app_dir', base_path)
-    Env.set('data_dir', data_dir)
-    Env.set('log_path', os.path.join(log_dir, 'CouchPotato.log'))
-    Env.set('db_path', 'sqlite:///' + db_path)
-    Env.set('cache_dir', os.path.join(data_dir, 'cache'))
-    Env.set('cache', FileSystemCache(os.path.join(Env.get('cache_dir'), 'python')))
+    Env.set('app_dir', toUnicode(base_path))
+    Env.set('data_dir', toUnicode(data_dir))
+    Env.set('log_path', toUnicode(os.path.join(log_dir, 'CouchPotato.log')))
+    Env.set('db_path', toUnicode('sqlite:///' + db_path))
+    Env.set('cache_dir', toUnicode(os.path.join(data_dir, 'cache')))
+    Env.set('cache', FileSystemCache(toUnicode(os.path.join(Env.get('cache_dir'), 'python'))))
     Env.set('console_log', options.console_log)
     Env.set('quiet', options.quiet)
     Env.set('desktop', desktop)
@@ -131,7 +146,7 @@ def runCouchPotato(options, base_path, args, data_dir = None, log_dir = None, En
     Env.set('dev', development)
 
     # Disable logging for some modules
-    for logger_name in ['enzyme', 'guessit', 'subliminal', 'apscheduler']:
+    for logger_name in ['enzyme', 'guessit', 'subliminal', 'apscheduler', 'tornado', 'requests']:
         logging.getLogger(logger_name).setLevel(logging.ERROR)
 
     for logger_name in ['gntp', 'migrate']:
@@ -154,7 +169,7 @@ def runCouchPotato(options, base_path, args, data_dir = None, log_dir = None, En
         logger.addHandler(hdlr)
 
     # To file
-    hdlr2 = handlers.RotatingFileHandler(Env.get('log_path'), 'a', 500000, 10)
+    hdlr2 = handlers.RotatingFileHandler(Env.get('log_path'), 'a', 500000, 10, encoding = Env.get('encoding'))
     hdlr2.setFormatter(formatter)
     logger.addHandler(hdlr2)
 
@@ -170,12 +185,7 @@ def runCouchPotato(options, base_path, args, data_dir = None, log_dir = None, En
 
     # Check if database exists
     db = Env.get('db_path')
-    db_exists = os.path.isfile(db_path)
-
-    # Load configs & plugins
-    loader = Env.get('loader')
-    loader.preload(root = base_path)
-    loader.run()
+    db_exists = os.path.isfile(toUnicode(db_path))
 
     # Load migrations
     if db_exists:
@@ -201,62 +211,88 @@ def runCouchPotato(options, base_path, args, data_dir = None, log_dir = None, En
     from couchpotato.core.settings.model import setup
     setup()
 
-    # Fill database with needed stuff
-    if not db_exists:
-        fireEvent('app.initialize', in_order = True)
-
     # Create app
-    from couchpotato import app
+    from couchpotato import WebHandler
+    web_base = ('/' + Env.setting('url_base').lstrip('/') + '/') if Env.setting('url_base') else '/'
+    Env.set('web_base', web_base)
+
     api_key = Env.setting('api_key')
-    url_base = '/' + Env.setting('url_base').lstrip('/') if Env.setting('url_base') else ''
+    if not api_key:
+        api_key = uuid4().hex
+        Env.setting('api_key', value = api_key)
+
+    api_base = r'%sapi/%s/' % (web_base, api_key)
+    Env.set('api_base', api_base)
 
     # Basic config
-    app.secret_key = api_key
     host = Env.setting('host', default = '0.0.0.0')
     # app.debug = development
     config = {
         'use_reloader': reloader,
-        'port': tryInt(Env.setting('port', default = 5000)),
+        'port': tryInt(Env.setting('port', default = 5050)),
         'host': host if host and len(host) > 0 else '0.0.0.0',
         'ssl_cert': Env.setting('ssl_cert', default = None),
         'ssl_key': Env.setting('ssl_key', default = None),
     }
 
-    # Static path
-    app.static_folder = os.path.join(base_path, 'couchpotato', 'static')
-    web.add_url_rule('api/%s/static/<path:filename>' % api_key,
-                      endpoint = 'static',
-                      view_func = app.send_static_file)
+    # Load the app
+    application = Application([],
+        log_function = lambda x: None,
+        debug = config['use_reloader'],
+        gzip = True,
+        cookie_secret = api_key,
+        login_url = '%slogin/' % web_base,
+    )
+    Env.set('app', application)
 
-    # Register modules
-    app.register_blueprint(web, url_prefix = '%s/' % url_base)
-    app.register_blueprint(api, url_prefix = '%s/api/%s/' % (url_base, api_key))
+    # Request handlers
+    application.add_handlers(".*$", [
+        (r'%snonblock/(.*)(/?)' % api_base, NonBlockHandler),
+
+        # API handlers
+        (r'%s(.*)(/?)' % api_base, ApiHandler),  # Main API handler
+        (r'%sgetkey(/?)' % web_base, KeyHandler),  # Get API key
+        (r'%s' % api_base, RedirectHandler, {"url": web_base + 'docs/'}),  # API docs
+
+        # Login handlers
+        (r'%slogin(/?)' % web_base, LoginHandler),
+        (r'%slogout(/?)' % web_base, LogoutHandler),
+
+        # Catch all webhandlers
+        (r'%s(.*)(/?)' % web_base, WebHandler),
+        (r'(.*)', WebHandler),
+    ])
+
+    # Static paths
+    static_path = '%sstatic/' % web_base
+    for dir_name in ['fonts', 'images', 'scripts', 'style']:
+        application.add_handlers(".*$", [
+            ('%s%s/(.*)' % (static_path, dir_name), StaticFileHandler, {'path': toUnicode(os.path.join(base_path, 'couchpotato', 'static', dir_name))})
+        ])
+    Env.set('static_path', static_path)
+
+    # Load configs & plugins
+    loader = Env.get('loader')
+    loader.preload(root = toUnicode(base_path))
+    loader.run()
+
+    # Fill database with needed stuff
+    if not db_exists:
+        fireEvent('app.initialize', in_order = True)
+
+    # Go go go!
+    from tornado.ioloop import IOLoop
+    loop = IOLoop.current()
 
     # Some logging and fire load event
     try: log.info('Starting server on port %(port)s', config)
     except: pass
     fireEventAsync('app.load')
 
-    # Go go go!
-    from tornado.ioloop import IOLoop
-    web_container = WSGIContainer(app)
-    web_container._log = _log
-    loop = IOLoop.current()
-
-
-    application = Application([
-        (r'%s/api/%s/nonblock/(.*)/' % (url_base, api_key), NonBlockHandler),
-        (r'.*', FallbackHandler, dict(fallback = web_container)),
-    ],
-        log_function = lambda x : None,
-        debug = config['use_reloader'],
-        gzip = True,
-    )
-
     if config['ssl_cert'] and config['ssl_key']:
         server = HTTPServer(application, no_keep_alive = True, ssl_options = {
-           "certfile": config['ssl_cert'],
-           "keyfile": config['ssl_key'],
+            'certfile': config['ssl_cert'],
+            'keyfile': config['ssl_key'],
         })
     else:
         server = HTTPServer(application, no_keep_alive = True)
@@ -268,11 +304,12 @@ def runCouchPotato(options, base_path, args, data_dir = None, log_dir = None, En
         try:
             server.listen(config['port'], config['host'])
             loop.start()
-        except Exception, e:
+        except Exception as e:
+            log.error('Failed starting: %s', traceback.format_exc())
             try:
                 nr, msg = e
                 if nr == 48:
-                    log.info('Already in use, try %s more time after few seconds', restart_tries)
+                    log.info('Port (%s) needed for CouchPotato is already in use, try %s more time after few seconds', (config.get('port'), restart_tries))
                     time.sleep(1)
                     restart_tries -= 1
 

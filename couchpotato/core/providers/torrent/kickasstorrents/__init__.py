@@ -1,5 +1,6 @@
 from .main import KickAssTorrents
 
+
 def start():
     return KickAssTorrents()
 
@@ -8,7 +9,6 @@ config = [{
     'groups': [
         {
             'tab': 'searcher',
-            'subtab': 'providers',
             'list': 'torrent_providers',
             'name': 'KickAssTorrents',
             'description': 'See <a href="https://kat.ph/">KickAssTorrents</a>',
@@ -18,6 +18,26 @@ config = [{
                     'name': 'enabled',
                     'type': 'enabler',
                     'default': True,
+                },
+                {
+                    'name': 'domain',
+                    'advanced': True,
+                    'label': 'Proxy server',
+                    'description': 'Domain for requests, keep empty to let CouchPotato pick.',
+                },
+                {
+                    'name': 'seed_ratio',
+                    'label': 'Seed ratio',
+                    'type': 'float',
+                    'default': 1,
+                    'description': 'Will not be (re)moved until this seed ratio is met.',
+                },
+                {
+                    'name': 'seed_time',
+                    'label': 'Seed time',
+                    'type': 'int',
+                    'default': 40,
+                    'description': 'Will not be (re)moved until this seed time (in hours) is met.',
                 },
                 {
                     'name': 'extra_score',

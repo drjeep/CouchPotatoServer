@@ -111,13 +111,19 @@ class CurlAsyncHTTPClient(AsyncHTTPClient):
                 del self._fds[fd]
         else:
             ioloop_event = event_map[event]
-            if fd not in self._fds:
-                self.io_loop.add_handler(fd, self._handle_events,
-                                         ioloop_event)
-                self._fds[fd] = ioloop_event
-            else:
-                self.io_loop.update_handler(fd, ioloop_event)
-                self._fds[fd] = ioloop_event
+            # libcurl sometimes closes a socket and then opens a new
+            # one using the same FD without giving us a POLL_NONE in
+            # between.  This is a problem with the epoll IOLoop,
+            # because the kernel can tell when a socket is closed and
+            # removes it from the epoll automatically, causing future
+            # update_handler calls to fail.  Since we can't tell when
+            # this has happened, always use remove and re-add
+            # instead of update.
+            if fd in self._fds:
+                self.io_loop.remove_handler(fd)
+            self.io_loop.add_handler(fd, self._handle_events,
+                                     ioloop_event)
+            self._fds[fd] = ioloop_event
 
     def _set_timeout(self, msecs):
         """Called by libcurl to schedule a timeout."""
@@ -312,10 +318,12 @@ def _curl_setup_request(curl, request, buffer, headers):
                     [native_str("%s: %s" % i) for i in request.headers.items()])
 
     if request.header_callback:
-        curl.setopt(pycurl.HEADERFUNCTION, request.header_callback)
+        curl.setopt(pycurl.HEADERFUNCTION,
+                    lambda line: request.header_callback(native_str(line)))
     else:
         curl.setopt(pycurl.HEADERFUNCTION,
-                    lambda line: _curl_header_callback(headers, line))
+                    lambda line: _curl_header_callback(headers,
+                                                       native_str(line)))
     if request.streaming_callback:
         write_function = request.streaming_callback
     else:
@@ -354,6 +362,7 @@ def _curl_setup_request(curl, request, buffer, headers):
             curl.setopt(pycurl.PROXYUSERPWD, credentials)
     else:
         curl.setopt(pycurl.PROXY, '')
+        curl.unsetopt(pycurl.PROXYUSERPWD)
     if request.validate_cert:
         curl.setopt(pycurl.SSL_VERIFYPEER, 1)
         curl.setopt(pycurl.SSL_VERIFYHOST, 2)
@@ -376,6 +385,8 @@ def _curl_setup_request(curl, request, buffer, headers):
         # that we can't reach, so allow ipv6 unless the user asks to disable.
         # (but see version check in _process_queue above)
         curl.setopt(pycurl.IPRESOLVE, pycurl.IPRESOLVE_V4)
+    else:
+        curl.setopt(pycurl.IPRESOLVE, pycurl.IPRESOLVE_WHATEVER)
 
     # Set the request method through curl's irritating interface which makes
     # up names for almost every single method
@@ -385,7 +396,7 @@ def _curl_setup_request(curl, request, buffer, headers):
         "PUT": pycurl.UPLOAD,
         "HEAD": pycurl.NOBODY,
     }
-    custom_methods = set(["DELETE"])
+    custom_methods = set(["DELETE", "OPTIONS", "PATCH"])
     for o in curl_options.values():
         curl.setopt(o, False)
     if request.method in curl_options:
@@ -398,6 +409,11 @@ def _curl_setup_request(curl, request, buffer, headers):
 
     # Handle curl's cryptic options for every individual HTTP method
     if request.method in ("POST", "PUT"):
+        if request.body is None:
+            raise AssertionError(
+                'Body must not be empty for "%s" request'
+                % request.method)
+
         request_buffer = BytesIO(utf8(request.body))
         curl.setopt(pycurl.READFUNCTION, request_buffer.read)
         if request.method == "POST":
@@ -408,6 +424,9 @@ def _curl_setup_request(curl, request, buffer, headers):
             curl.setopt(pycurl.POSTFIELDSIZE, len(request.body))
         else:
             curl.setopt(pycurl.INFILESIZE, len(request.body))
+    elif request.method == "GET":
+        if request.body is not None:
+            raise AssertionError('Body must be empty for GET request')
 
     if request.auth_username is not None:
         userpwd = "%s:%s" % (request.auth_username, request.auth_password or '')

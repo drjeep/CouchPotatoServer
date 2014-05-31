@@ -1,5 +1,4 @@
 from couchpotato.core.event import addEvent
-from couchpotato.core.helpers.request import jsonified
 from couchpotato.core.logger import CPLog
 from couchpotato.core.notifications.base import Notification
 import os
@@ -16,8 +15,9 @@ class Synoindex(Notification):
         super(Synoindex, self).__init__()
         addEvent('renamer.after', self.addToLibrary)
 
-    def addToLibrary(self, message = None, group = {}):
+    def addToLibrary(self, message = None, group = None):
         if self.isDisabled(): return
+        if not group: group = {}
 
         command = [self.index_path, '-A', group.get('destination_dir')]
         log.info('Executing synoindex command: %s ', command)
@@ -26,11 +26,12 @@ class Synoindex(Notification):
             out = p.communicate()
             log.info('Result from synoindex: %s', str(out))
             return True
-        except OSError, e:
+        except OSError as e:
             log.error('Unable to run synoindex: %s', e)
-            return False
 
-        return True
+        return False
 
-    def test(self):
-        return jsonified({'success': os.path.isfile(self.index_path)})
+    def test(self, **kwargs):
+        return {
+            'success': os.path.isfile(self.index_path)
+        }

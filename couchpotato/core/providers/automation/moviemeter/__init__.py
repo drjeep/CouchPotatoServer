@@ -1,5 +1,6 @@
 from .main import Moviemeter
 
+
 def start():
     return Moviemeter()
 
@@ -11,7 +12,7 @@ config = [{
             'list': 'automation_providers',
             'name': 'moviemeter_automation',
             'label': 'Moviemeter',
-            'description': 'Imports movies from the current top 10 of moviemeter.nl. (uses minimal requirements)',
+            'description': 'Imports movies from the current top 10 of moviemeter.nl.',
             'options': [
                 {
                     'name': 'automation_enabled',

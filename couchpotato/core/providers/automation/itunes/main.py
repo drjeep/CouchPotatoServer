@@ -16,22 +16,19 @@ class ITunes(Automation, RSS):
 
     def getIMDBids(self):
 
-        if self.isDisabled():
-            return
-
         movies = []
 
         enablers = [tryInt(x) for x in splitString(self.conf('automation_urls_use'))]
         urls = splitString(self.conf('automation_urls'))
 
         namespace = 'http://www.w3.org/2005/Atom'
-        namespaceIM = 'http://itunes.apple.com/rss'
+        namespace_im = 'https://rss.itunes.apple.com'
 
         index = -1
         for url in urls:
 
             index += 1
-            if not enablers[index]:
+            if len(enablers) == 0 or len(enablers) < index or not enablers[index]:
                 continue
 
             try:
@@ -45,10 +42,10 @@ class ITunes(Automation, RSS):
                     rss_movies = self.getElements(data, entry_tag)
 
                     for movie in rss_movies:
-                        name_tag = str(QName(namespaceIM, 'name'))
+                        name_tag = str(QName(namespace_im, 'name'))
                         name = self.getTextElement(movie, name_tag)
 
-                        releaseDate_tag = str(QName(namespaceIM, 'releaseDate'))
+                        releaseDate_tag = str(QName(namespace_im, 'releaseDate'))
                         releaseDateText = self.getTextElement(movie, releaseDate_tag)
                         year = datetime.datetime.strptime(releaseDateText, '%Y-%m-%dT00:00:00-07:00').strftime("%Y")
 

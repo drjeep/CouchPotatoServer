@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # Smewt - A smart collection manager
-# Copyright (c) 2008 Nicolas Wack <wackou@gmail.com>
+# Copyright (c) 2008-2012 Nicolas Wack <wackou@gmail.com>
 #
 # Smewt is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,9 +23,12 @@ from guessit import s
 from guessit.patterns import sep
 import functools
 import unicodedata
-import copy
+import re
 
 # string-related functions
+
+def normalize_unicode(s):
+    return unicodedata.normalize('NFC', s)
 
 
 def strip_brackets(s):
@@ -40,10 +43,13 @@ def strip_brackets(s):
     return s
 
 
-def clean_string(s):
-    for c in sep[:-2]: # do not remove dashes ('-')
-        s = s.replace(c, ' ')
-    parts = s.split()
+def clean_string(st):
+    for c in sep:
+        # do not remove certain chars
+        if c in ['-', ',']:
+            continue
+        st = st.replace(c, ' ')
+    parts = st.split()
     result = ' '.join(p for p in parts if p != '')
 
     # now also remove dashes on the outer part of the string
@@ -53,6 +59,21 @@ def clean_string(s):
         result = result[:-1]
 
     return result
+
+
+_words_rexp = re.compile('\w+', re.UNICODE)
+
+def find_words(s):
+    return _words_rexp.findall(s.replace('_', ' '))
+
+
+def reorder_title(title):
+    ltitle = title.lower()
+    if ltitle[-4:] == ',the':
+        return title[-3:] + ' ' + title[:-4]
+    if ltitle[-5:] == ', the':
+        return title[-3:] + ' ' + title[:-5]
+    return title
 
 
 def str_replace(string, pos, c):

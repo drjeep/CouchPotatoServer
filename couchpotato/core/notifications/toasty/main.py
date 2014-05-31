@@ -5,13 +5,15 @@ import traceback
 
 log = CPLog(__name__)
 
+
 class Toasty(Notification):
 
     urls = {
         'api': 'http://api.supertoasty.com/notify/%s?%s'
     }
 
-    def notify(self, message = '', data = {}, listener = None):
+    def notify(self, message = '', data = None, listener = None):
+        if not data: data = {}
 
         data = {
             'title': self.default_title,

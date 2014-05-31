@@ -1,6 +1,7 @@
 from .main import Blackhole
 from couchpotato.core.helpers.variable import getDownloadDir
 
+
 def start():
     return Blackhole()
 
@@ -13,7 +14,7 @@ config = [{
             'list': 'download_providers',
             'name': 'blackhole',
             'label': 'Black hole',
-            'description': 'Download the NZB/Torrent to a specific folder.',
+            'description': 'Download the NZB/Torrent to a specific folder. <em>Note: Seeding and copying/linking features do <strong>not</strong> work with Black hole</em>.',
             'wizard': True,
             'options': [
                 {
@@ -34,6 +35,13 @@ config = [{
                     'default': 'both',
                     'type': 'dropdown',
                     'values': [('usenet & torrents', 'both'), ('usenet', 'nzb'), ('torrent', 'torrent')],
+                },
+                {
+                    'name': 'create_subdir',
+                    'default': 0,
+                    'type': 'bool',
+                    'advanced': True,
+                    'description': 'Create a sub directory when saving the .nzb (or .torrent).',
                 },
                 {
                     'name': 'manual',

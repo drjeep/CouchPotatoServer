@@ -1,5 +1,6 @@
 from .main import NZBGet
 
+
 def start():
     return NZBGet()
 
@@ -12,6 +13,7 @@ config = [{
             'name': 'nzbget',
             'label': 'NZBGet',
             'description': 'Use <a href="http://nzbget.sourceforge.net/Main_Page" target="_blank">NZBGet</a> to download NZBs.',
+            'wizard': True,
             'options': [
                 {
                     'name': 'enabled',
@@ -23,6 +25,13 @@ config = [{
                     'name': 'host',
                     'default': 'localhost:6789',
                     'description': 'Hostname with port. Usually <strong>localhost:6789</strong>',
+                },
+                {
+                    'name': 'ssl',
+                    'default': 0,
+                    'type': 'bool',
+                    'advanced': True,
+                    'description': 'Use HyperText Transfer Protocol Secure, or <strong>https</strong>',
                 },
                 {
                     'name': 'username',
@@ -42,6 +51,7 @@ config = [{
                 },
                 {
                     'name': 'priority',
+                    'advanced': True,
                     'default': '0',
                     'type': 'dropdown',
                     'values': [('Very Low', -100), ('Low', -50), ('Normal', 0), ('High', 50), ('Very High', 100)],
@@ -57,6 +67,7 @@ config = [{
                 {
                     'name': 'delete_failed',
                     'default': True,
+                    'advanced': True,
                     'type': 'bool',
                     'description': 'Delete a release after the download has failed.',
                 },

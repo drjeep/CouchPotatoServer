@@ -1,84 +1,140 @@
-from couchpotato.api import api_docs, api_docs_missing
-from couchpotato.core.auth import requires_auth
+from couchpotato.api import api_docs, api_docs_missing, api
 from couchpotato.core.event import fireEvent
-from couchpotato.core.helpers.request import getParams, jsonified
-from couchpotato.core.helpers.variable import md5
+from couchpotato.core.helpers.variable import md5, tryInt
 from couchpotato.core.logger import CPLog
 from couchpotato.environment import Env
-from flask.app import Flask
-from flask.blueprints import Blueprint
-from flask.globals import request
-from flask.helpers import url_for
-from flask.templating import render_template
-from sqlalchemy.engine import create_engine
-from sqlalchemy.orm import scoped_session
-from sqlalchemy.orm.session import sessionmaker
-from werkzeug.utils import redirect
+from tornado import template
+from tornado.web import RequestHandler, authenticated
 import os
 import time
+import traceback
+
 
 log = CPLog(__name__)
 
-app = Flask(__name__, static_folder = 'nope')
-web = Blueprint('web', __name__)
+views = {}
+template_loader = template.Loader(os.path.join(os.path.dirname(__file__), 'templates'))
+
+class BaseHandler(RequestHandler):
+
+    def get_current_user(self):
+        username = Env.setting('username')
+        password = Env.setting('password')
+
+        if username and password:
+            return self.get_secure_cookie('user')
+        else:  # Login when no username or password are set
+            return True
 
 
-def get_session(engine = None):
-    return Env.getSession(engine)
+# Main web handler
+class WebHandler(BaseHandler):
+
+    @authenticated
+    def get(self, route, *args, **kwargs):
+        route = route.strip('/')
+        if not views.get(route):
+            page_not_found(self)
+            return
+
+        try:
+            self.write(views[route]())
+        except:
+            log.error("Failed doing web request '%s': %s", (route, traceback.format_exc()))
+            self.write({'success': False, 'error': 'Failed returning results'})
+
 
 def addView(route, func, static = False):
-    web.add_url_rule(route + ('' if static else '/'), endpoint = route if route else 'index', view_func = func)
+    views[route] = func
 
-""" Web view """
-@web.route('/')
-@requires_auth
+
+def get_session():
+    return Env.getSession()
+
+
+# Web view
 def index():
-    return render_template('index.html', sep = os.sep, fireEvent = fireEvent, env = Env)
+    return template_loader.load('index.html').generate(sep = os.sep, fireEvent = fireEvent, Env = Env)
+addView('', index)
 
-""" Api view """
-@web.route('docs/')
-@requires_auth
+
+# API docs
 def apiDocs():
-    from couchpotato import app
-    routes = []
-    for route, x in sorted(app.view_functions.iteritems()):
-        if route[0:4] == 'api.':
-            routes += [route[4:].replace('::', '.')]
+    routes = list(api.keys())
 
     if api_docs.get(''):
         del api_docs['']
         del api_docs_missing['']
-    return render_template('api.html', fireEvent = fireEvent, routes = sorted(routes), api_docs = api_docs, api_docs_missing = sorted(api_docs_missing))
 
-@web.route('getkey/')
-def getApiKey():
+    return template_loader.load('api.html').generate(fireEvent = fireEvent, routes = sorted(routes), api_docs = api_docs, api_docs_missing = sorted(api_docs_missing), Env = Env)
 
-    api = None
-    params = getParams()
-    username = Env.setting('username')
-    password = Env.setting('password')
+addView('docs', apiDocs)
 
-    if (params.get('u') == md5(username) or not username) and (params.get('p') == password or not password):
-        api = Env.setting('api_key')
 
-    return jsonified({
-        'success': api is not None,
-        'api_key': api
-    })
+# Make non basic auth option to get api key
+class KeyHandler(RequestHandler):
+    def get(self, *args, **kwargs):
+        api_key = None
 
-@app.errorhandler(404)
-def page_not_found(error):
-    index_url = url_for('web.index')
-    url = request.path[len(index_url):]
+        try:
+            username = Env.setting('username')
+            password = Env.setting('password')
+
+            if (self.get_argument('u') == md5(username) or not username) and (self.get_argument('p') == password or not password):
+                api_key = Env.setting('api_key')
+
+            self.write({
+                'success': api_key is not None,
+                'api_key': api_key
+            })
+        except:
+            log.error('Failed doing key request: %s', (traceback.format_exc()))
+            self.write({'success': False, 'error': 'Failed returning results'})
+
+
+class LoginHandler(BaseHandler):
+
+    def get(self, *args, **kwargs):
+
+        if self.get_current_user():
+            self.redirect(Env.get('web_base'))
+        else:
+            self.write(template_loader.load('login.html').generate(sep = os.sep, fireEvent = fireEvent, Env = Env))
+
+    def post(self, *args, **kwargs):
+
+        api_key = None
+
+        username = Env.setting('username')
+        password = Env.setting('password')
+
+        if (self.get_argument('username') == username or not username) and (md5(self.get_argument('password')) == password or not password):
+            api_key = Env.setting('api_key')
+
+        if api_key:
+            remember_me = tryInt(self.get_argument('remember_me', default = 0))
+            self.set_secure_cookie('user', api_key, expires_days = 30 if remember_me > 0 else None)
+
+        self.redirect(Env.get('web_base'))
+
+
+class LogoutHandler(BaseHandler):
+
+    def get(self, *args, **kwargs):
+        self.clear_cookie('user')
+        self.redirect('%slogin/' % Env.get('web_base'))
+
+
+def page_not_found(rh):
+    index_url = Env.get('web_base')
+    url = rh.request.uri[len(index_url):]
 
     if url[:3] != 'api':
-        if request.path != '/':
-            r = request.url.replace(request.path, index_url + '#' + url)
-        else:
-            r = '%s%s' % (request.url.rstrip('/'), index_url + '#' + url)
-        return redirect(r)
+        r = index_url + '#' + url.lstrip('/')
+        rh.redirect(r)
     else:
         if not Env.get('dev'):
             time.sleep(0.1)
-        return 'Wrong API key used', 404
 
+        rh.set_status(404)
+        rh.write('Wrong API key used')

@@ -1,19 +1,20 @@
 from couchpotato.core.helpers.encoding import toUnicode
-from couchpotato.core.helpers.variable import natcmp
-from flask.globals import current_app
-from flask.helpers import json, make_response
+from couchpotato.core.helpers.variable import natsortKey
 from urllib import unquote
-from werkzeug.urls import url_decode
-import flask
 import re
 
-def getParams():
 
-    params = url_decode(getattr(flask.request, 'environ').get('QUERY_STRING', ''))
+def getParams(params):
+
     reg = re.compile('^[a-z0-9_\.]+$')
 
-    current = temp = {}
-    for param, value in sorted(params.iteritems()):
+    # Sort keys
+    param_keys = params.keys()
+    param_keys.sort(key = natsortKey)
+
+    temp = {}
+    for param in param_keys:
+        value = params[param]
 
         nest = re.split("([\[\]]+)", param)
         if len(nest) > 1:
@@ -36,16 +37,22 @@ def getParams():
                     current = current[item]
         else:
             temp[param] = toUnicode(unquote(value))
+            if temp[param].lower() in ['true', 'false']:
+                temp[param] = temp[param].lower() != 'false'
 
     return dictToList(temp)
+
 
 def dictToList(params):
 
     if type(params) is dict:
         new = {}
-        for x, value in params.iteritems():
+        for x, value in params.items():
             try:
-                new_value = [dictToList(value[k]) for k in sorted(value.iterkeys(), cmp = natcmp)]
+                convert = lambda text: int(text) if text.isdigit() else text.lower()
+                alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
+                sorted_keys = sorted(value.keys(), key = alphanum_key)
+                new_value = [dictToList(value[k]) for k in sorted_keys]
             except:
                 new_value = value
 
@@ -54,29 +61,3 @@ def dictToList(params):
         new = params
 
     return new
-
-def getParam(attr, default = None):
-    try:
-        return getParams().get(attr, default)
-    except:
-        return default
-
-def padded_jsonify(callback, *args, **kwargs):
-    content = str(callback) + '(' + json.dumps(dict(*args, **kwargs)) + ')'
-    return getattr(current_app, 'response_class')(content, mimetype = 'text/javascript')
-
-def jsonify(mimetype, *args, **kwargs):
-    content = json.dumps(dict(*args, **kwargs))
-    return getattr(current_app, 'response_class')(content, mimetype = mimetype)
-
-def jsonified(*args, **kwargs):
-    callback = getParam('callback_func', None)
-    if callback:
-        content = padded_jsonify(callback, *args, **kwargs)
-    else:
-        content = jsonify('application/json', *args, **kwargs)
-
-    response = make_response(content)
-    response.cache_control.no_cache = True
-
-    return response

@@ -1,5 +1,6 @@
 from .main import NzbIndex
 
+
 def start():
     return NzbIndex()
 
@@ -8,7 +9,6 @@ config = [{
     'groups': [
         {
             'tab': 'searcher',
-            'subtab': 'providers',
             'list': 'nzb_providers',
             'name': 'nzbindex',
             'description': 'Free provider, less accurate. See <a href="https://www.nzbindex.com/">NZBIndex</a>',

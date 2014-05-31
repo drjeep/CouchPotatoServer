@@ -1,12 +1,11 @@
 from couchpotato.api import addApiView
 from couchpotato.core.helpers.encoding import tryUrlencode
-from couchpotato.core.helpers.request import jsonified, getParam
 from couchpotato.core.helpers.variable import cleanHost
 from couchpotato.core.logger import CPLog
 from couchpotato.core.notifications.base import Notification
-from flask.helpers import url_for
-from pytwitter import Api, parse_qsl
-from werkzeug.utils import redirect
+from couchpotato.environment import Env
+from pytwitter import Api
+from urlparse import parse_qsl
 import oauth2
 
 log = CPLog(__name__)
@@ -31,7 +30,8 @@ class Twitter(Notification):
         addApiView('notify.%s.auth_url' % self.getName().lower(), self.getAuthorizationUrl)
         addApiView('notify.%s.credentials' % self.getName().lower(), self.getCredentials)
 
-    def notify(self, message = '', data = {}, listener = None):
+    def notify(self, message = '', data = None, listener = None):
+        if not data: data = {}
 
         api = Api(self.consumer_key, self.consumer_secret, self.conf('access_token_key'), self.conf('access_token_secret'))
 
@@ -52,7 +52,7 @@ class Twitter(Notification):
         try:
             if direct_message:
                 for user in direct_message_users.split():
-                    api.PostDirectMessage(user, '[%s] %s' % (self.default_title, message))
+                    api.PostDirectMessage('[%s] %s' % (self.default_title, message), screen_name = user)
             else:
                 update_message = '[%s] %s' % (self.default_title, message)
                 if len(update_message) > 140:
@@ -64,16 +64,15 @@ class Twitter(Notification):
                         api.PostUpdate(update_message[135:] + ' 2/2')
                 else:
                     api.PostUpdate(update_message)
-        except Exception, e:
+        except Exception as e:
             log.error('Error sending tweet: %s', e)
             return False
 
         return True
 
-    def getAuthorizationUrl(self):
+    def getAuthorizationUrl(self, host = None, **kwargs):
 
-        referer = getParam('host')
-        callback_url = cleanHost(referer) + '%snotify.%s.credentials/' % (url_for('api.index').lstrip('/'), self.getName().lower())
+        callback_url = cleanHost(host) + '%snotify.%s.credentials/' % (Env.get('api_base').lstrip('/'), self.getName().lower())
 
         oauth_consumer = oauth2.Consumer(self.consumer_key, self.consumer_secret)
         oauth_client = oauth2.Client(oauth_consumer)
@@ -82,31 +81,29 @@ class Twitter(Notification):
 
         if resp['status'] != '200':
             log.error('Invalid response from Twitter requesting temp token: %s', resp['status'])
-            return jsonified({
+            return {
                 'success': False,
-            })
+            }
         else:
             self.request_token = dict(parse_qsl(content))
 
             auth_url = self.urls['authorize'] + ("?oauth_token=%s" % self.request_token['oauth_token'])
 
             log.info('Redirecting to "%s"', auth_url)
-            return jsonified({
+            return {
                 'success': True,
                 'url': auth_url,
-            })
+            }
 
-    def getCredentials(self):
-
-        key = getParam('oauth_verifier')
+    def getCredentials(self, oauth_verifier, **kwargs):
 
         token = oauth2.Token(self.request_token['oauth_token'], self.request_token['oauth_token_secret'])
-        token.set_verifier(key)
+        token.set_verifier(oauth_verifier)
 
         oauth_consumer = oauth2.Consumer(key = self.consumer_key, secret = self.consumer_secret)
         oauth_client = oauth2.Client(oauth_consumer, token)
 
-        resp, content = oauth_client.request(self.urls['access'], method = 'POST', body = 'oauth_verifier=%s' % key)
+        resp, content = oauth_client.request(self.urls['access'], method = 'POST', body = 'oauth_verifier=%s' % oauth_verifier)
         access_token = dict(parse_qsl(content))
 
         if resp['status'] != '200':
@@ -121,4 +118,4 @@ class Twitter(Notification):
 
             self.request_token = None
 
-            return redirect(url_for('web.index') + 'settings/notifications/')
+            return 'redirect', Env.get('web_base') + 'settings/notifications/'

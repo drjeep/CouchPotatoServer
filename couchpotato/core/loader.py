@@ -1,20 +1,20 @@
 from couchpotato.core.event import fireEvent
 from couchpotato.core.logger import CPLog
-import glob
+from importhelper import import_module
 import os
+import sys
 import traceback
+import six
 
 log = CPLog(__name__)
 
-class Loader(object):
 
+class Loader(object):
     plugins = {}
     providers = {}
-
     modules = {}
 
     def preload(self, root = ''):
-
         core = os.path.join(root, 'couchpotato', 'core')
 
         self.paths = {
@@ -25,25 +25,37 @@ class Loader(object):
         }
 
         # Add providers to loader
-        provider_dir = os.path.join(root, 'couchpotato', 'core', 'providers')
-        for provider in os.listdir(provider_dir):
-            path = os.path.join(provider_dir, provider)
-            if os.path.isdir(path):
-                self.paths[provider + '_provider'] = (25, 'couchpotato.core.providers.' + provider, path)
+        self.addPath(root, ['couchpotato', 'core', 'providers'], 25, recursive = False)
 
+        # Add media to loader
+        self.addPath(root, ['couchpotato', 'core', 'media'], 25, recursive = True)
 
-        for plugin_type, plugin_tuple in self.paths.iteritems():
+        # Add custom plugin folder
+        from couchpotato.environment import Env
+        custom_plugin_dir = os.path.join(Env.get('data_dir'), 'custom_plugins')
+        if os.path.isdir(custom_plugin_dir):
+            sys.path.insert(0, custom_plugin_dir)
+            self.paths['custom_plugins'] = (30, '', custom_plugin_dir)
+
+        # Loop over all paths and add to module list
+        for plugin_type, plugin_tuple in self.paths.items():
             priority, module, dir_name = plugin_tuple
             self.addFromDir(plugin_type, priority, module, dir_name)
 
     def run(self):
         did_save = 0
 
-        for priority in self.modules:
-            for module_name, plugin in sorted(self.modules[priority].iteritems()):
+        for priority in sorted(self.modules):
+            for module_name, plugin in sorted(self.modules[priority].items()):
+
                 # Load module
                 try:
-                    m = getattr(self.loadModule(module_name), plugin.get('name'))
+                    if plugin.get('name')[:2] == '__':
+                        continue
+
+                    m = self.loadModule(module_name)
+                    if m is None:
+                        continue
 
                     log.info('Loading %s: %s', (plugin['type'], plugin['name']))
 
@@ -53,7 +65,7 @@ class Loader(object):
                     self.loadPlugins(m, plugin.get('name'))
                 except ImportError as e:
                     # todo:: subclass ImportError for missing requirements.
-                    if (e.message.lower().startswith("missing")):
+                    if e.message.lower().startswith("missing"):
                         log.error(e.message)
                         pass
                     # todo:: this needs to be more descriptive.
@@ -65,27 +77,35 @@ class Loader(object):
         if did_save:
             fireEvent('settings.save')
 
+    def addPath(self, root, base_path, priority, recursive = False):
+        root_path = os.path.join(root, *base_path)
+        for filename in os.listdir(root_path):
+            path = os.path.join(root_path, filename)
+            if os.path.isdir(path) and filename[:2] != '__':
+                if six.u('__init__.py') in os.listdir(path):
+                    new_base_path = ''.join(s + '.' for s in base_path) + filename
+                    self.paths[new_base_path.replace('.', '_')] = (priority, new_base_path, path)
+
+                if recursive:
+                    self.addPath(root, base_path + [filename], priority, recursive = True)
+
     def addFromDir(self, plugin_type, priority, module, dir_name):
 
         # Load dir module
-        try:
-            m = __import__(module)
-            splitted = module.split('.')
-            for sub in splitted[1:]:
-                m = getattr(m, sub)
+        if module and len(module) > 0:
+            self.addModule(priority, plugin_type, module, os.path.basename(dir_name))
 
-            if hasattr(m, 'config'):
-                fireEvent('settings.options', splitted[-1] + '_config', getattr(m, 'config'))
-        except:
-            raise
-
-        for cur_file in glob.glob(os.path.join(dir_name, '*')):
-            name = os.path.basename(cur_file)
-            if os.path.isdir(os.path.join(dir_name, name)):
+        for name in os.listdir(dir_name):
+            if os.path.isdir(os.path.join(dir_name, name)) and name != 'static' and os.path.isfile(os.path.join(dir_name, name, '__init__.py')):
                 module_name = '%s.%s' % (module, name)
                 self.addModule(priority, plugin_type, module_name, name)
 
     def loadSettings(self, module, name, save = True):
+
+        if not hasattr(module, 'config'):
+            log.debug('Skip loading settings for plugin %s as it has no config section' % module.__file__)
+            return False
+
         try:
             for section in module.config:
                 fireEvent('settings.options', section['name'], section)
@@ -100,15 +120,14 @@ class Loader(object):
             return False
 
     def loadPlugins(self, module, name):
+
+        if not hasattr(module, 'start'):
+            log.debug('Skip startup for plugin %s as it has no start section' % module.__file__)
+            return False
         try:
-            klass = module.start()
-            klass.registerPlugin()
-
-            if klass and getattr(klass, 'auto_register_static'):
-                klass.registerStatic(module.__file__)
-
+            module.start()
             return True
-        except Exception, e:
+        except:
             log.error('Failed loading plugin "%s": %s', (module.__file__, traceback.format_exc()))
             return False
 
@@ -117,6 +136,7 @@ class Loader(object):
         if not self.modules.get(priority):
             self.modules[priority] = {}
 
+        module = module.lstrip('.')
         self.modules[priority][module] = {
             'priority': priority,
             'module': module,
@@ -126,10 +146,9 @@ class Loader(object):
 
     def loadModule(self, name):
         try:
-            m = __import__(name)
-            splitted = name.split('.')
-            for sub in splitted[1:-1]:
-                m = getattr(m, sub)
-            return m
+            return import_module(name)
+        except ImportError:
+            log.debug('Skip loading module plugin %s: %s', (name, traceback.format_exc()))
+            return None
         except:
             raise

@@ -19,7 +19,6 @@ For example, the following asynchronous handler::
 could be written with ``gen`` as::
 
     class GenAsyncHandler(RequestHandler):
-        @asynchronous
         @gen.coroutine
         def get(self):
             http_client = AsyncHTTPClient()
@@ -39,8 +38,8 @@ since it is both shorter and provides better exception handling)::
     def get(self):
         yield gen.Task(AsyncHTTPClient().fetch, "http://example.com")
 
-You can also yield a list of ``Futures`` and/or ``Tasks``, which will be
-started at the same time and run in parallel; a list of results will
+You can also yield a list or dict of ``Futures`` and/or ``Tasks``, which will be
+started at the same time and run in parallel; a list or dict of results will
 be returned when they are all finished::
 
     @gen.coroutine
@@ -48,17 +47,23 @@ be returned when they are all finished::
         http_client = AsyncHTTPClient()
         response1, response2 = yield [http_client.fetch(url1),
                                       http_client.fetch(url2)]
+        response_dict = yield dict(response3=http_client.fetch(url3),
+                                   response4=http_client.fetch(url4))
+        response3 = response_dict['response3']
+        response4 = response_dict['response4']
+
+.. versionchanged:: 3.2
+   Dict support added.
 
 For more complicated interfaces, `Task` can be split into two parts:
 `Callback` and `Wait`::
 
     class GenAsyncHandler2(RequestHandler):
-        @asynchronous
         @gen.coroutine
         def get(self):
             http_client = AsyncHTTPClient()
             http_client.fetch("http://example.com",
-                              callback=(yield gen.Callback("key"))
+                              callback=(yield gen.Callback("key")))
             response = yield gen.Wait("key")
             do_something_with_response(response)
             self.render("template.html")
@@ -136,7 +141,7 @@ def engine(func):
             if runner is not None:
                 return runner.handle_exception(typ, value, tb)
             return False
-        with ExceptionStackContext(handle_exception):
+        with ExceptionStackContext(handle_exception) as deactivate:
             try:
                 result = func(*args, **kwargs)
             except (Return, StopIteration) as e:
@@ -149,6 +154,7 @@ def engine(func):
                                 "@gen.engine functions cannot return values: "
                                 "%r" % (value,))
                         assert value is None
+                        deactivate()
                     runner = Runner(result, final_callback)
                     runner.run()
                     return
@@ -156,6 +162,7 @@ def engine(func):
                 raise ReturnValueIgnoredError(
                     "@gen.engine functions cannot return values: %r" %
                     (result,))
+            deactivate()
             # no yield, so we're done
     return wrapper
 
@@ -164,13 +171,7 @@ def coroutine(func):
     """Decorator for asynchronous generators.
 
     Any generator that yields objects from this module must be wrapped
-    in either this decorator or `engine`.  These decorators only work
-    on functions that are already asynchronous.  For
-    `~tornado.web.RequestHandler` :ref:`HTTP verb methods <verbs>` methods, this
-    means that both the `tornado.web.asynchronous` and
-    `tornado.gen.coroutine` decorators must be used (for proper
-    exception handling, ``asynchronous`` should come before
-    ``gen.coroutine``).
+    in either this decorator or `engine`.
 
     Coroutines may "return" by raising the special exception
     `Return(value) <Return>`.  In Python 3.3+, it is also possible for
@@ -208,21 +209,24 @@ def coroutine(func):
                 typ, value, tb = sys.exc_info()
             future.set_exc_info((typ, value, tb))
             return True
-        with ExceptionStackContext(handle_exception):
+        with ExceptionStackContext(handle_exception) as deactivate:
             try:
                 result = func(*args, **kwargs)
             except (Return, StopIteration) as e:
                 result = getattr(e, 'value', None)
             except Exception:
+                deactivate()
                 future.set_exc_info(sys.exc_info())
                 return future
             else:
                 if isinstance(result, types.GeneratorType):
                     def final_callback(value):
+                        deactivate()
                         future.set_result(value)
                     runner = Runner(result, final_callback)
                     runner.run()
                     return future
+            deactivate()
             future.set_result(result)
         return future
     return wrapper
@@ -385,16 +389,26 @@ class YieldFuture(YieldPoint):
         self.io_loop = io_loop or IOLoop.current()
 
     def start(self, runner):
-        self.runner = runner
-        self.key = object()
-        runner.register_callback(self.key)
-        self.io_loop.add_future(self.future, runner.result_callback(self.key))
+        if not self.future.done():
+            self.runner = runner
+            self.key = object()
+            runner.register_callback(self.key)
+            self.io_loop.add_future(self.future, runner.result_callback(self.key))
+        else:
+            self.runner = None
+            self.result = self.future.result()
 
     def is_ready(self):
-        return self.runner.is_ready(self.key)
+        if self.runner is not None:
+            return self.runner.is_ready(self.key)
+        else:
+            return True
 
     def get_result(self):
-        return self.runner.pop_result(self.key).result()
+        if self.runner is not None:
+            return self.runner.pop_result(self.key).result()
+        else:
+            return self.result
 
 
 class Multi(YieldPoint):
@@ -406,6 +420,10 @@ class Multi(YieldPoint):
     a list of ``YieldPoints``.
     """
     def __init__(self, children):
+        self.keys = None
+        if isinstance(children, dict):
+            self.keys = list(children.keys())
+            children = children.values()
         self.children = []
         for i in children:
             if isinstance(i, Future):
@@ -425,7 +443,11 @@ class Multi(YieldPoint):
         return not self.unfinished_children
 
     def get_result(self):
-        return [i.get_result() for i in self.children]
+        result = (i.get_result() for i in self.children)
+        if self.keys is not None:
+            return dict(zip(self.keys, result))
+        else:
+            return list(result)
 
 
 class _NullYieldPoint(YieldPoint):
@@ -439,6 +461,9 @@ class _NullYieldPoint(YieldPoint):
         return None
 
 
+_null_yield_point = _NullYieldPoint()
+
+
 class Runner(object):
     """Internal implementation of `tornado.gen.engine`.
 
@@ -449,7 +474,7 @@ class Runner(object):
     def __init__(self, gen, final_callback):
         self.gen = gen
         self.final_callback = final_callback
-        self.yield_point = _NullYieldPoint()
+        self.yield_point = _null_yield_point
         self.pending_callbacks = set()
         self.results = {}
         self.running = False
@@ -493,6 +518,7 @@ class Runner(object):
                         if not self.yield_point.is_ready():
                             return
                         next = self.yield_point.get_result()
+                        self.yield_point = None
                     except Exception:
                         self.exc_info = sys.exc_info()
                 try:
@@ -505,6 +531,7 @@ class Runner(object):
                         yielded = self.gen.send(next)
                 except (StopIteration, Return) as e:
                     self.finished = True
+                    self.yield_point = _null_yield_point
                     if self.pending_callbacks and not self.had_exception:
                         # If we ran cleanly without waiting on all callbacks
                         # raise an error (really more of a warning).  If we
@@ -518,8 +545,9 @@ class Runner(object):
                     return
                 except Exception:
                     self.finished = True
+                    self.yield_point = _null_yield_point
                     raise
-                if isinstance(yielded, list):
+                if isinstance(yielded, (list, dict)):
                     yielded = Multi(yielded)
                 elif isinstance(yielded, Future):
                     yielded = YieldFuture(yielded)
@@ -531,7 +559,7 @@ class Runner(object):
                         self.exc_info = sys.exc_info()
                 else:
                     self.exc_info = (BadYieldError(
-                            "yielded unknown object %r" % (yielded,)),)
+                        "yielded unknown object %r" % (yielded,)),)
         finally:
             self.running = False
 

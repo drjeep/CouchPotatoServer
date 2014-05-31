@@ -1,26 +1,44 @@
 from couchpotato.core.event import addEvent, fireEvent
+from couchpotato.core.helpers.encoding import ss
 from couchpotato.core.helpers.variable import tryFloat, mergeDicts, md5, \
     possibleTitles, getTitle
 from couchpotato.core.logger import CPLog
 from couchpotato.core.plugins.base import Plugin
 from couchpotato.environment import Env
 from urlparse import urlparse
-import cookielib
 import json
 import re
 import time
 import traceback
-import urllib2
 import xml.etree.ElementTree as XMLTree
-
 
 log = CPLog(__name__)
 
 
+class MultiProvider(Plugin):
+
+    def __init__(self):
+        self._classes = []
+
+        for Type in self.getTypes():
+            klass = Type()
+
+            # Overwrite name so logger knows what we're talking about
+            klass.setName('%s:%s' % (self.getName(), klass.getName()))
+
+            self._classes.append(klass)
+
+    def getTypes(self):
+        return []
+
+    def getClasses(self):
+        return self._classes
+
+
 class Provider(Plugin):
 
-    type = None # movie, nzb, torrent, subtitle, trailer
-    http_time_between_calls = 10 # Default timeout for url requests
+    type = None  # movie, show, subtitle, trailer, ...
+    http_time_between_calls = 10  # Default timeout for url requests
 
     last_available_check = {}
     is_available = {}
@@ -44,13 +62,17 @@ class Provider(Plugin):
 
         return self.is_available.get(host, False)
 
-    def getJsonData(self, url, **kwargs):
+    def getJsonData(self, url, decode_from = None, **kwargs):
 
-        cache_key = '%s%s' % (md5(url), md5('%s' % kwargs.get('params', {})))
+        cache_key = md5(url)
         data = self.getCache(cache_key, url, **kwargs)
 
         if data:
             try:
+                data = data.strip()
+                if decode_from:
+                    data = data.decode(decode_from)
+
                 return json.loads(data)
             except:
                 log.error('Failed to parsing %s: %s', (self.getName(), traceback.format_exc()))
@@ -59,12 +81,12 @@ class Provider(Plugin):
 
     def getRSSData(self, url, item_path = 'channel/item', **kwargs):
 
-        cache_key = '%s%s' % (md5(url), md5('%s' % kwargs.get('params', {})))
+        cache_key = md5(url)
         data = self.getCache(cache_key, url, **kwargs)
 
-        if data:
+        if data and len(data) > 0:
             try:
-                data = XMLTree.fromstring(data)
+                data = XMLTree.fromstring(ss(data))
                 return self.getElements(data, item_path)
             except:
                 log.error('Failed to parsing %s: %s', (self.getName(), traceback.format_exc()))
@@ -73,65 +95,82 @@ class Provider(Plugin):
 
     def getHTMLData(self, url, **kwargs):
 
-        cache_key = '%s%s' % (md5(url), md5('%s' % kwargs.get('params', {})))
+        cache_key = md5(url)
         return self.getCache(cache_key, url, **kwargs)
 
 
 class YarrProvider(Provider):
 
-    cat_ids = []
+    protocol = None  # nzb, torrent, torrent_magnet
+    type = 'movie'
 
-    sizeGb = ['gb', 'gib']
-    sizeMb = ['mb', 'mib']
-    sizeKb = ['kb', 'kib']
+    cat_ids = {}
+    cat_backup_id = None
 
-    login_opener = None
+    size_gb = ['gb', 'gib']
+    size_mb = ['mb', 'mib']
+    size_kb = ['kb', 'kib']
+
+    last_login_check = None
 
     def __init__(self):
-        addEvent('provider.enabled_types', self.getEnabledProviderType)
+        addEvent('provider.enabled_protocols', self.getEnabledProtocol)
         addEvent('provider.belongs_to', self.belongsTo)
-        addEvent('yarr.search', self.search)
-        addEvent('%s.search' % self.type, self.search)
+        addEvent('provider.search.%s.%s' % (self.protocol, self.type), self.search)
 
-    def getEnabledProviderType(self):
+    def getEnabledProtocol(self):
         if self.isEnabled():
-            return self.type
+            return self.protocol
         else:
             return []
 
     def login(self):
 
+        # Check if we are still logged in every hour
+        now = time.time()
+        if self.last_login_check and self.last_login_check < (now - 3600):
+            try:
+                output = self.urlopen(self.urls['login_check'])
+                if self.loginCheckSuccess(output):
+                    self.last_login_check = now
+                    return True
+            except: pass
+            self.last_login_check = None
+
+        if self.last_login_check:
+            return True
+
         try:
-            cookiejar = cookielib.CookieJar()
-            opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookiejar))
-            opener.addheaders = []
-            urllib2.install_opener(opener)
-            log.info2('Logging into %s', self.urls['login'])
-            f = opener.open(self.urls['login'], self.getLoginParams())
-            output = f.read()
-            f.close()
+            output = self.urlopen(self.urls['login'], data = self.getLoginParams())
 
             if self.loginSuccess(output):
-                self.login_opener = opener
+                self.last_login_check = now
                 return True
-        except:
-            log.error('Failed to login %s: %s', (self.getName(), traceback.format_exc()))
 
+            error = 'unknown'
+        except:
+            error = traceback.format_exc()
+
+        self.last_login_check = None
+        log.error('Failed to login %s: %s', (self.getName(), error))
         return False
 
     def loginSuccess(self, output):
         return True
 
+    def loginCheckSuccess(self, output):
+        return True
+
     def loginDownload(self, url = '', nzb_id = ''):
         try:
-            if not self.login_opener and not self.login():
+            if not self.login():
                 log.error('Failed downloading from %s', self.getName())
-            return self.urlopen(url, opener = self.login_opener)
+            return self.urlopen(url)
         except:
             log.error('Failed downloading from %s: %s', (self.getName(), traceback.format_exc()))
 
     def getLoginParams(self):
-        return ''
+        return {}
 
     def download(self, url = '', nzb_id = ''):
         try:
@@ -147,7 +186,7 @@ class YarrProvider(Provider):
             return []
 
         # Login if needed
-        if self.urls.get('login') and (not self.login_opener and not self.login()):
+        if self.urls.get('login') and not self.login():
             log.error('Failed to login to: %s', self.getName())
             return []
 
@@ -179,25 +218,25 @@ class YarrProvider(Provider):
                     if hostname in download_url:
                         return self
         except:
-            log.debug('Url % s doesn\'t belong to %s', (url, self.getName()))
+            log.debug('Url %s doesn\'t belong to %s', (url, self.getName()))
 
         return
 
     def parseSize(self, size):
 
-        sizeRaw = size.lower()
+        size_raw = size.lower()
         size = tryFloat(re.sub(r'[^0-9.]', '', size).strip())
 
-        for s in self.sizeGb:
-            if s in sizeRaw:
+        for s in self.size_gb:
+            if s in size_raw:
                 return size * 1024
 
-        for s in self.sizeMb:
-            if s in sizeRaw:
+        for s in self.size_mb:
+            if s in size_raw:
                 return size
 
-        for s in self.sizeKb:
-            if s in sizeRaw:
+        for s in self.size_kb:
+            if s in size_raw:
                 return size / 1024
 
         return 0
@@ -209,21 +248,24 @@ class YarrProvider(Provider):
             if identifier in qualities:
                 return ids
 
-        return [self.cat_backup_id]
+        if self.cat_backup_id:
+            return [self.cat_backup_id]
+
+        return []
 
 
 class ResultList(list):
 
     result_ids = None
     provider = None
-    movie = None
+    media = None
     quality = None
 
-    def __init__(self, provider, movie, quality, **kwargs):
+    def __init__(self, provider, media, quality, **kwargs):
 
         self.result_ids = []
         self.provider = provider
-        self.movie = movie
+        self.media = media
         self.quality = quality
         self.kwargs = kwargs
 
@@ -237,12 +279,22 @@ class ResultList(list):
 
         new_result = self.fillResult(result)
 
-        is_correct_movie = fireEvent('searcher.correct_movie',
-                                     nzb = new_result, movie = self.movie, quality = self.quality,
-                                     imdb_results = self.kwargs.get('imdb_results', False), single = True)
+        is_correct = fireEvent('searcher.correct_release', new_result, self.media, self.quality,
+                               imdb_results = self.kwargs.get('imdb_results', False), single = True)
 
-        if is_correct_movie and new_result['id'] not in self.result_ids:
-            new_result['score'] += fireEvent('score.calculate', new_result, self.movie, single = True)
+        if is_correct and new_result['id'] not in self.result_ids:
+            is_correct_weight = float(is_correct)
+
+            new_result['score'] += fireEvent('score.calculate', new_result, self.media, single = True)
+
+            old_score = new_result['score']
+            new_result['score'] = int(old_score * is_correct_weight)
+
+            log.info('Found correct release with weight %.02f, old_score(%d) now scaled to score(%d)', (
+                is_correct_weight,
+                old_score,
+                new_result['score']
+            ))
 
             self.found(new_result)
             self.result_ids.append(result['id'])
@@ -253,9 +305,12 @@ class ResultList(list):
 
         defaults = {
             'id': 0,
+            'protocol': self.provider.protocol,
             'type': self.provider.type,
             'provider': self.provider.getName(),
-            'download': self.provider.download,
+            'download': self.provider.loginDownload if self.provider.urls.get('login') else self.provider.download,
+            'seed_ratio': Env.setting('seed_ratio', section = self.provider.getName().lower(), default = ''),
+            'seed_time': Env.setting('seed_time', section = self.provider.getName().lower(), default = ''),
             'url': '',
             'name': '',
             'age': 0,

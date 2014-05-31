@@ -12,8 +12,8 @@ class Trailer(Plugin):
     def __init__(self):
         addEvent('renamer.after', self.searchSingle)
 
-    def searchSingle(self, message = None, group = {}):
-
+    def searchSingle(self, message = None, group = None):
+        if not group: group = {}
         if self.isDisabled() or len(group['files']['trailer']) > 0: return
 
         trailers = fireEvent('trailer.search', group = group, merge = True)
@@ -28,7 +28,7 @@ class Trailer(Plugin):
             destination = os.path.join(group['destination_dir'], filename)
             if not os.path.isfile(destination):
                 trailer_file = fireEvent('file.download', url = trailer, dest = destination, urlopen_kwargs = {'headers': {'User-Agent': 'Quicktime'}}, single = True)
-                if os.path.getsize(trailer_file) < (1024 * 1024): # Don't trust small trailers (1MB), try next one
+                if os.path.getsize(trailer_file) < (1024 * 1024):  # Don't trust small trailers (1MB), try next one
                     os.unlink(trailer_file)
                     continue
             else:
@@ -40,4 +40,3 @@ class Trailer(Plugin):
             break
 
         return True
-

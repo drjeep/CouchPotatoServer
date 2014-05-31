@@ -41,15 +41,21 @@ class Guess(UnicodeMixin, dict):
             confidence = kwargs.pop('confidence')
         except KeyError:
             confidence = 0
+            
+        try:
+            raw = kwargs.pop('raw')
+        except KeyError:
+            raw = None
 
         dict.__init__(self, *args, **kwargs)
 
         self._confidence = {}
+        self._raw = {}
         for prop in self:
             self._confidence[prop] = confidence
-
-
-    def to_dict(self):
+            self._raw[prop] = raw
+            
+    def to_dict(self, advanced=False):
         data = dict(self)
         for prop, value in data.items():
             if isinstance(value, datetime.date):
@@ -58,45 +64,64 @@ class Guess(UnicodeMixin, dict):
                 data[prop] = u(value)
             elif isinstance(value, list):
                 data[prop] = [u(x) for x in value]
+            if advanced:
+                data[prop] = {"value": data[prop], "raw": self.raw(prop), "confidence": self.confidence(prop)}
 
         return data
 
-    def nice_string(self):
-        data = self.to_dict()
-
-        parts = json.dumps(data, indent=4).split('\n')
-        for i, p in enumerate(parts):
-            if p[:5] != '    "':
-                continue
-
-            prop = p.split('"')[1]
-            parts[i] = ('    [%.2f] "' % self.confidence(prop)) + p[5:]
-
-        return '\n'.join(parts)
+    def nice_string(self, advanced=False):
+        if advanced:
+            data = self.to_dict(advanced)
+            return json.dumps(data, indent=4)
+        else:            
+            data = self.to_dict()
+    
+            parts = json.dumps(data, indent=4).split('\n')
+            for i, p in enumerate(parts):
+                if p[:5] != '    "':
+                    continue
+    
+                prop = p.split('"')[1]
+                parts[i] = ('    [%.2f] "' % self.confidence(prop)) + p[5:]
+    
+            return '\n'.join(parts)
 
     def __unicode__(self):
         return u(self.to_dict())
 
     def confidence(self, prop):
         return self._confidence.get(prop, -1)
+    
+    def raw(self, prop):
+        return self._raw.get(prop, None)
 
-    def set(self, prop, value, confidence=None):
+    def set(self, prop, value, confidence=None, raw=None):
         self[prop] = value
         if confidence is not None:
             self._confidence[prop] = confidence
+        if raw is not None:
+            self._raw[prop] = raw
 
     def set_confidence(self, prop, value):
         self._confidence[prop] = value
+        
+    def set_raw(self, prop, value):
+        self._raw[prop] = value
 
-    def update(self, other, confidence=None):
+    def update(self, other, confidence=None, raw=None):
         dict.update(self, other)
         if isinstance(other, Guess):
             for prop in other:
                 self._confidence[prop] = other.confidence(prop)
+                self._raw[prop] = other.raw(prop)
 
         if confidence is not None:
             for prop in other:
                 self._confidence[prop] = confidence
+
+        if raw is not None:
+            for prop in other:
+                self._raw[prop] = raw
 
     def update_highest_confidence(self, other):
         """Update this guess with the values from the given one. In case
@@ -110,6 +135,7 @@ class Guess(UnicodeMixin, dict):
                 continue
             self[prop] = other[prop]
             self._confidence[prop] = other.confidence(prop)
+            self._raw[prop] = other.raw(prop)
 
 
 def choose_int(g1, g2):
@@ -181,7 +207,7 @@ def choose_string(g1, g2):
     elif v1l in v2l:
         return (v1, combined_prob)
 
-    # in case of conflict, return the one with highest priority
+    # in case of conflict, return the one with highest confidence
     else:
         if c1 > c2:
             return (v1, c1 - c2)
@@ -253,47 +279,25 @@ def merge_similar_guesses(guesses, prop, choose):
             merge_similar_guesses(guesses, prop, choose)
 
 
-def merge_append_guesses(guesses, prop):
-    """Take a list of guesses and merge those which have the same properties by
-    appending them in a list.
-
-    DEPRECATED, remove with old guessers
-
-    """
-    similar = [guess for guess in guesses if prop in guess]
-    if not similar:
-        return
-
-    merged = similar[0]
-    merged[prop] = [merged[prop]]
-    # TODO: what to do with global confidence? mean of them all?
-
-    for m in similar[1:]:
-        for prop2 in m:
-            if prop == prop2:
-                merged[prop].append(m[prop])
-            else:
-                if prop2 in m:
-                    log.warning('overwriting property "%s" with value %s' % (prop2, m[prop2]))
-                merged[prop2] = m[prop2]
-                # TODO: confidence also
-
-        guesses.remove(m)
-
-
 def merge_all(guesses, append=None):
     """Merge all the guesses in a single result, remove very unlikely values,
     and return it.
     You can specify a list of properties that should be appended into a list
     instead of being merged.
 
-    >>> s(merge_all([ Guess({ 'season': 2 }, confidence = 0.6),
-    ...               Guess({ 'episodeNumber': 13 }, confidence = 0.8) ]))
+    >>> s(merge_all([ Guess({'season': 2}, confidence=0.6),
+    ...               Guess({'episodeNumber': 13}, confidence=0.8) ]))
     {'season': 2, 'episodeNumber': 13}
 
-    >>> s(merge_all([ Guess({ 'episodeNumber': 27 }, confidence = 0.02),
-    ...               Guess({ 'season': 1 }, confidence = 0.2) ]))
+    >>> s(merge_all([ Guess({'episodeNumber': 27}, confidence=0.02),
+    ...               Guess({'season': 1}, confidence=0.2) ]))
     {'season': 1}
+
+    >>> s(merge_all([ Guess({'other': 'PROPER'}, confidence=0.8),
+    ...               Guess({'releaseGroup': '2HD'}, confidence=0.8) ],
+    ...             append=['other']))
+    {'releaseGroup': '2HD', 'other': ['PROPER']}
+
 
     """
     if not guesses:
@@ -310,14 +314,15 @@ def merge_all(guesses, append=None):
                 result.set(prop, result.get(prop, []) + [g[prop]],
                            # TODO: what to do with confidence here? maybe an
                            # arithmetic mean...
-                           confidence=g.confidence(prop))
+                           confidence=g.confidence(prop),
+                           raw=g.raw(prop))
 
                 del g[prop]
 
         # then merge the remaining ones
         dups = set(result) & set(g)
         if dups:
-            log.warning('duplicate properties %s in merged result...' % dups)
+            log.warning('duplicate properties %s in merged result...' % [ (result[p], g[p]) for p in dups] )
 
         result.update_highest_confidence(g)
 
@@ -328,7 +333,13 @@ def merge_all(guesses, append=None):
 
     # make sure our appendable properties contain unique values
     for prop in append:
-        if prop in result:
-            result[prop] = list(set(result[prop]))
+        try:
+            value = result[prop]
+            if isinstance(value, list):
+                result[prop] = list(set(value))
+            else:
+                result[prop] = [ value ]
+        except KeyError:
+            pass
 
     return result

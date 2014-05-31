@@ -1,6 +1,6 @@
 from couchpotato import get_session
 from couchpotato.core.event import addEvent, fireEvent
-from couchpotato.core.helpers.encoding import toUnicode
+from couchpotato.core.helpers.encoding import toUnicode, sp
 from couchpotato.core.helpers.variable import splitString
 from couchpotato.core.logger import CPLog
 from couchpotato.core.plugins.base import Plugin
@@ -36,17 +36,16 @@ class Subtitle(Plugin):
 
                     files = []
                     for file in release.files.filter(FileType.status.has(identifier = 'movie')).all():
-                        files.append(file.path);
+                        files.append(file.path)
 
                     # get subtitles for those files
                     subliminal.list_subtitles(files, cache_dir = Env.get('cache_dir'), multi = True, languages = self.getLanguages(), services = self.services)
 
     def searchSingle(self, group):
-
         if self.isDisabled(): return
 
         try:
-            available_languages = sum(group['subtitle_language'].itervalues(), [])
+            available_languages = sum(group['subtitle_language'].values(), [])
             downloaded = []
             files = [toUnicode(x) for x in group['files']['movie']]
             log.debug('Searching for subtitles for: %s', files)
@@ -59,8 +58,9 @@ class Subtitle(Plugin):
 
             for d_sub in downloaded:
                 log.info('Found subtitle (%s): %s', (d_sub.language.alpha2, files))
-                group['files']['subtitle'].add(d_sub.path)
-                group['subtitle_language'][d_sub.path] = [d_sub.language.alpha2]
+                group['files']['subtitle'].append(sp(d_sub.path))
+                group['before_rename'].append(sp(d_sub.path))
+                group['subtitle_language'][sp(d_sub.path)] = [d_sub.language.alpha2]
 
             return True
 

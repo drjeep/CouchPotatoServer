@@ -1,6 +1,6 @@
 from base64 import b64encode
-from couchpotato.core.downloaders.base import Downloader, StatusList
-from couchpotato.core.helpers.encoding import tryUrlencode, ss
+from couchpotato.core.downloaders.base import Downloader, ReleaseDownloadList
+from couchpotato.core.helpers.encoding import tryUrlencode, sp
 from couchpotato.core.helpers.variable import cleanHost
 from couchpotato.core.logger import CPLog
 from urllib2 import URLError
@@ -8,65 +8,80 @@ from uuid import uuid4
 import hashlib
 import httplib
 import json
+import os
 import socket
 import ssl
 import sys
+import time
 import traceback
 import urllib2
 
 log = CPLog(__name__)
 
+
 class NZBVortex(Downloader):
 
-    type = ['nzb']
+    protocol = ['nzb']
     api_level = None
     session_id = None
 
-    def download(self, data = {}, movie = {}, filedata = None):
+    def download(self, data = None, media = None, filedata = None):
+        if not media: media = {}
+        if not data: data = {}
 
         # Send the nzb
         try:
-            nzb_filename = self.createFileName(data, filedata, movie)
-            self.call('nzb/add', params = {'file': (ss(nzb_filename), filedata)}, multipart = True)
+            nzb_filename = self.createFileName(data, filedata, media)
+            self.call('nzb/add', files = {'file': (nzb_filename, filedata)})
 
+            time.sleep(10)
             raw_statuses = self.call('nzb')
-            nzb_id = [item['id'] for item in raw_statuses.get('nzbs', []) if item['name'] == nzb_filename][0]
+            nzb_id = [nzb['id'] for nzb in raw_statuses.get('nzbs', []) if os.path.basename(nzb['nzbFileName']) == nzb_filename][0]
             return self.downloadReturnId(nzb_id)
         except:
             log.error('Something went wrong sending the NZB file: %s', traceback.format_exc())
             return False
 
-    def getAllDownloadStatus(self):
+    def test(self):
+        try:
+            login_result = self.login()
+        except:
+            return False
+
+        return login_result
+
+    def getAllDownloadStatus(self, ids):
 
         raw_statuses = self.call('nzb')
 
-        statuses = StatusList(self)
-        for item in raw_statuses.get('nzbs', []):
+        release_downloads = ReleaseDownloadList(self)
+        for nzb in raw_statuses.get('nzbs', []):
+            if nzb['id'] in ids:
 
-            # Check status
-            status = 'busy'
-            if item['state'] == 20:
-                status = 'completed'
-            elif item['state'] in [21, 22, 24]:
-                status = 'failed'
+                # Check status
+                status = 'busy'
+                if nzb['state'] == 20:
+                    status = 'completed'
+                elif nzb['state'] in [21, 22, 24]:
+                    status = 'failed'
 
-            statuses.append({
-                'id': item['id'],
-                'name': item['uiTitle'],
-                'status': status,
-                'original_status': item['state'],
-                'timeleft': -1,
-                'folder': item['destinationPath'],
-            })
+                release_downloads.append({
+                    'id': nzb['id'],
+                    'name': nzb['uiTitle'],
+                    'status': status,
+                    'original_status': nzb['state'],
+                    'timeleft': -1,
+                    'folder': sp(nzb['destinationPath']),
+                })
 
-        return statuses
+        return release_downloads
 
-    def removeFailed(self, item):
+    def removeFailed(self, release_download):
 
-        log.info('%s failed downloading, deleting...', item['name'])
+        log.info('%s failed downloading, deleting...', release_download['name'])
 
         try:
-            self.call('nzb/%s/cancel' % item['id'])
+            self.call('nzb/%s/cancel' % release_download['id'])
         except:
             log.error('Failed deleting: %s', traceback.format_exc(0))
             return False
@@ -95,10 +110,10 @@ class NZBVortex(Downloader):
         log.error('Login failed, please check you api-key')
         return False
 
-
-    def call(self, call, parameters = {}, repeat = False, auth = True, *args, **kwargs):
+    def call(self, call, parameters = None, repeat = False, auth = True, *args, **kwargs):
 
         # Login first
+        if not parameters: parameters = {}
         if not self.session_id and auth:
             self.login()
 
@@ -108,20 +123,19 @@ class NZBVortex(Downloader):
 
         params = tryUrlencode(parameters)
 
-        url = cleanHost(self.conf('host')) + 'api/' + call
-        url_opener = urllib2.build_opener(HTTPSHandler())
+        url = cleanHost(self.conf('host'), ssl = self.conf('ssl')) + 'api/' + call
 
         try:
-            data = self.urlopen('%s?%s' % (url, params), opener = url_opener, *args, **kwargs)
+            data = self.urlopen('%s?%s' % (url, params), *args, **kwargs)
 
             if data:
                 return json.loads(data)
-        except URLError, e:
+        except URLError as e:
             if hasattr(e, 'code') and e.code == 403:
                 # Try login and do again
                 if not repeat:
                     self.login()
-                    return self.call(call, parameters = parameters, repeat = True, *args, **kwargs)
+                    return self.call(call, parameters = parameters, repeat = True, **kwargs)
 
             log.error('Failed to parsing %s: %s', (self.getName(), traceback.format_exc()))
         except:
@@ -134,12 +148,11 @@ class NZBVortex(Downloader):
         if not self.api_level:
 
             url = cleanHost(self.conf('host')) + 'api/app/apilevel'
-            url_opener = urllib2.build_opener(HTTPSHandler())
 
             try:
-                data = self.urlopen(url, opener = url_opener, show_error = False)
+                data = self.urlopen(url, show_error = False)
                 self.api_level = float(json.loads(data).get('apilevel'))
-            except URLError, e:
+            except URLError as e:
                 if hasattr(e, 'code') and e.code == 403:
                     log.error('This version of NZBVortex isn\'t supported. Please update to 2.8.6 or higher')
                 else:
@@ -147,7 +160,8 @@ class NZBVortex(Downloader):
 
         return self.api_level
 
-    def isEnabled(self, manual, data):
+    def isEnabled(self, manual = False, data = None):
+        if not data: data = {}
         return super(NZBVortex, self).isEnabled(manual, data) and self.getApiLevel()
 
 
@@ -167,6 +181,7 @@ class HTTPSConnection(httplib.HTTPSConnection):
                 self._tunnel()
 
         self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, ssl_version = ssl.PROTOCOL_TLSv1)
+
 
 class HTTPSHandler(urllib2.HTTPSHandler):
     def https_open(self, req):

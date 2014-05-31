@@ -1,6 +1,7 @@
 from couchpotato.core.plugins.renamer.main import Renamer
 import os
 
+
 def start():
     return Renamer()
 
@@ -14,15 +15,21 @@ rename_options = {
         'year': 'Year (2011)',
         'first': 'First letter (M)',
         'quality': 'Quality (720p)',
+        'quality_type': '(HD) or (SD)',
         'video': 'Video (x264)',
         'audio': 'Audio (DTS)',
         'group': 'Releasegroup name',
         'source': 'Source media (Bluray)',
+        'resolution_width': 'resolution width (1280)',
+        'resolution_height': 'resolution height (720)',
+        'audio_channels': 'audio channels (7.1)',
         'original': 'Original filename',
         'original_folder': 'Original foldername',
         'imdb_id': 'IMDB id (tt0123456)',
         'cd': 'CD number (cd1)',
         'cd_nr': 'Just the cd nr. (1)',
+        'mpaa': 'MPAA Rating',
+        'category': 'Category label',
     },
 }
 
@@ -50,7 +57,7 @@ config = [{
                 {
                     'name': 'to',
                     'type': 'directory',
-                    'description': 'Folder where the movies should be moved to.',
+                    'description': 'Default folder where the movies are moved to.',
                 },
                 {
                     'name': 'folder_name',
@@ -69,6 +76,12 @@ config = [{
                     'options': rename_options
                 },
                 {
+                    'name': 'unrar',
+                    'type': 'bool',
+                    'description': 'Extract rar files if found.',
+                    'default': False,
+                },
+                {
                     'name': 'cleanup',
                     'type': 'bool',
                     'description': 'Cleanup leftover files after successful rename.',
@@ -81,7 +94,7 @@ config = [{
                     'default': 1,
                     'type': 'int',
                     'unit': 'min(s)',
-                    'description': 'Detect movie status every X minutes. Will start the renamer if movie is <strong>completed</strong> or handle <strong>failed</strong> download if these options are enabled',
+                    'description': ('Detect movie status every X minutes.', 'Will start the renamer if movie is <strong>completed</strong> or handle <strong>failed</strong> download if these options are enabled'),
                 },
                 {
                     'advanced': True,
@@ -109,16 +122,23 @@ config = [{
                 {
                     'advanced': True,
                     'name': 'separator',
-                    'label': 'Separator',
-                    'description': 'Replace all the spaces with a character. Example: ".", "-" (without quotes). Leave empty to use spaces.',
+                    'label': 'File-Separator',
+                    'description': ('Replace all the spaces with a character.', 'Example: ".", "-" (without quotes). Leave empty to use spaces.'),
+                },
+                {
+                    'advanced': True,
+                    'name': 'foldersep',
+                    'label': 'Folder-Separator',
+                    'description': ('Replace all the spaces with a character.', 'Example: ".", "-" (without quotes). Leave empty to use spaces.'),
                 },
                 {
                     'name': 'file_action',
                     'label': 'Torrent File Action',
-                    'default': 'move',
+                    'default': 'link',
                     'type': 'dropdown',
-                    'values': [('Move', 'move'), ('Copy', 'copy'), ('Hard link', 'hardlink'), ('Sym link', 'symlink'), ('Move & Sym link', 'move_symlink')],
-                    'description': 'Define which kind of file operation you want to use for torrents. Before you start using <a href="http://en.wikipedia.org/wiki/Hard_link">hard links</a> or <a href="http://en.wikipedia.org/wiki/Sym_link">sym links</a>, PLEASE read about their possible drawbacks.',
+                    'values': [('Link', 'link'), ('Copy', 'copy'), ('Move', 'move')],
+                    'description': ('<strong>Link</strong>, <strong>Copy</strong> or <strong>Move</strong> after download completed.',
+                                    'Link first tries <a href="http://en.wikipedia.org/wiki/Hard_link">hard link</a>, then <a href="http://en.wikipedia.org/wiki/Sym_link">sym link</a> and falls back to Copy. It is perfered to use link when downloading torrents as it will save you space, while still beeing able to seed.'),
                     'advanced': True,
                 },
                 {

@@ -1,11 +1,11 @@
 import logging
 import re
-import traceback
+
 
 class CPLog(object):
 
     context = ''
-    replace_private = ['api', 'apikey', 'api_key', 'password', 'username', 'h', 'uid', 'key']
+    replace_private = ['api', 'apikey', 'api_key', 'password', 'username', 'h', 'uid', 'key', 'passkey']
 
     def __init__(self, context = ''):
         if context.endswith('.main'):
@@ -38,7 +38,7 @@ class CPLog(object):
     def safeMessage(self, msg, replace_tuple = ()):
 
         from couchpotato.environment import Env
-        from couchpotato.core.helpers.encoding import ss
+        from couchpotato.core.helpers.encoding import ss, toUnicode
 
         msg = ss(msg)
 
@@ -50,8 +50,8 @@ class CPLog(object):
                     msg = msg % tuple([ss(x) for x in list(replace_tuple)])
                 else:
                     msg = msg % ss(replace_tuple)
-            except:
-                self.logger.error(u'Failed encoding stuff to log: %s' % traceback.format_exc())
+            except Exception as e:
+                self.logger.error('Failed encoding stuff to log "%s": %s' % (msg, e))
 
         if not Env.get('dev'):
 
@@ -67,4 +67,4 @@ class CPLog(object):
             except:
                 pass
 
-        return msg
+        return toUnicode(msg)

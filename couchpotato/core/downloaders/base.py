@@ -1,4 +1,5 @@
 from base64 import b32decode, b16encode
+from couchpotato.api import addApiView
 from couchpotato.core.event import addEvent
 from couchpotato.core.helpers.variable import mergeDicts
 from couchpotato.core.logger import CPLog
@@ -11,12 +12,13 @@ log = CPLog(__name__)
 
 class Downloader(Provider):
 
-    type = []
+    protocol = []
     http_time_between_calls = 0
+    status_support = True
 
     torrent_sources = [
         'http://torrage.com/torrent/%s.torrent',
-        'http://torcache.net/torrent/%s.torrent',
+        'https://torcache.net/torrent/%s.torrent',
     ]
 
     torrent_trackers = [
@@ -36,48 +38,75 @@ class Downloader(Provider):
     def __init__(self):
         addEvent('download', self._download)
         addEvent('download.enabled', self._isEnabled)
-        addEvent('download.enabled_types', self.getEnabledDownloadType)
+        addEvent('download.enabled_protocols', self.getEnabledProtocol)
         addEvent('download.status', self._getAllDownloadStatus)
         addEvent('download.remove_failed', self._removeFailed)
+        addEvent('download.pause', self._pause)
+        addEvent('download.process_complete', self._processComplete)
+        addApiView('download.%s.test' % self.getName().lower(), self._test)
 
-    def getEnabledDownloadType(self):
-        for download_type in self.type:
-            if self.isEnabled(manual = True, data = {'type': download_type}):
-                return self.type
+    def getEnabledProtocol(self):
+        for download_protocol in self.protocol:
+            if self.isEnabled(manual = True, data = {'protocol': download_protocol}):
+                return self.protocol
 
         return []
 
-    def _download(self, data = {}, movie = {}, manual = False, filedata = None):
+    def _download(self, data = None, media = None, manual = False, filedata = None):
+        if not media: media = {}
+        if not data: data = {}
+
         if self.isDisabled(manual, data):
             return
-        return self.download(data = data, movie = movie, filedata = filedata)
+        return self.download(data = data, media = media, filedata = filedata)
 
-    def _getAllDownloadStatus(self):
+    def _getAllDownloadStatus(self, download_ids):
         if self.isDisabled(manual = True, data = {}):
             return
 
-        return self.getAllDownloadStatus()
+        ids = [download_id['id'] for download_id in download_ids if download_id['downloader'] == self.getName()]
 
-    def getAllDownloadStatus(self):
-        return
+        if ids:
+            return self.getAllDownloadStatus(ids)
+        else:
+            return
 
-    def _removeFailed(self, item):
+    def getAllDownloadStatus(self, ids):
+        return []
+
+    def _removeFailed(self, release_download):
         if self.isDisabled(manual = True, data = {}):
             return
 
-        if self.conf('delete_failed', default = True):
-            return self.removeFailed(item)
+        if release_download and release_download.get('downloader') == self.getName():
+            if self.conf('delete_failed'):
+                return self.removeFailed(release_download)
 
-        return False
-
-    def removeFailed(self, item):
+            return False
         return
 
-    def isCorrectType(self, item_type):
-        is_correct = item_type in self.type
+    def removeFailed(self, release_download):
+        return
+
+    def _processComplete(self, release_download):
+        if self.isDisabled(manual = True, data = {}):
+            return
+
+        if release_download and release_download.get('downloader') == self.getName():
+            if self.conf('remove_complete', default = False):
+                return self.processComplete(release_download = release_download, delete_files = self.conf('delete_files', default = False))
+
+            return False
+        return
+
+    def processComplete(self, release_download, delete_files):
+        return
+
+    def isCorrectProtocol(self, protocol):
+        is_correct = protocol in self.protocol
 
         if not is_correct:
-            log.debug("Downloader doesn't support this type")
+            log.debug("Downloader doesn't support this protocol")
 
         return is_correct
 
@@ -101,31 +130,59 @@ class Downloader(Provider):
             except:
                 log.debug('Torrent hash "%s" wasn\'t found on: %s', (torrent_hash, source))
 
-        log.error('Failed converting magnet url to torrent: %s', (torrent_hash))
+        log.error('Failed converting magnet url to torrent: %s', torrent_hash)
         return False
 
     def downloadReturnId(self, download_id):
         return {
             'downloader': self.getName(),
+            'status_support': self.status_support,
             'id': download_id
         }
 
-    def isDisabled(self, manual, data):
+    def isDisabled(self, manual = False, data = None):
+        if not data: data = {}
+
         return not self.isEnabled(manual, data)
 
-    def _isEnabled(self, manual, data = {}):
+    def _isEnabled(self, manual, data = None):
+        if not data: data = {}
+
         if not self.isEnabled(manual, data):
             return
         return True
 
-    def isEnabled(self, manual, data = {}):
+    def isEnabled(self, manual = False, data = None):
+        if not data: data = {}
+
         d_manual = self.conf('manual', default = False)
         return super(Downloader, self).isEnabled() and \
-            ((d_manual and manual) or (d_manual is False)) and \
-            (not data or self.isCorrectType(data.get('type')))
+            (d_manual and manual or d_manual is False) and \
+            (not data or self.isCorrectProtocol(data.get('protocol')))
 
+    def _test(self):
+        t = self.test()
+        if isinstance(t, tuple):
+            return {'success': t[0], 'msg': t[1]}
+        return {'success': t}
 
-class StatusList(list):
+    def test(self):
+        return False
+
+    def _pause(self, release_download, pause = True):
+        if self.isDisabled(manual = True, data = {}):
+            return
+
+        if release_download and release_download.get('downloader') == self.getName():
+            self.pause(release_download, pause)
+            return True
+
+        return False
+
+    def pause(self, release_download, pause):
+        return
+
+class ReleaseDownloadList(list):
 
     provider = None
 
@@ -134,7 +191,7 @@ class StatusList(list):
         self.provider = provider
         self.kwargs = kwargs
 
-        super(StatusList, self).__init__()
+        super(ReleaseDownloadList, self).__init__()
 
     def extend(self, results):
         for r in results:
@@ -142,7 +199,7 @@ class StatusList(list):
 
     def append(self, result):
         new_result = self.fillResult(result)
-        super(StatusList, self).append(new_result)
+        super(ReleaseDownloadList, self).append(new_result)
 
     def fillResult(self, result):
 
@@ -151,6 +208,7 @@ class StatusList(list):
             'status': 'busy',
             'downloader': self.provider.getName(),
             'folder': '',
+            'files': '',
         }
 
         return mergeDicts(defaults, result)

@@ -1,5 +1,6 @@
 from .main import Newznab
 
+
 def start():
     return Newznab()
 
@@ -8,7 +9,6 @@ config = [{
     'groups': [
         {
             'tab': 'searcher',
-            'subtab': 'providers',
             'list': 'nzb_providers',
             'name': 'newznab',
             'order': 10,
@@ -21,6 +21,7 @@ config = [{
                 {
                     'name': 'enabled',
                     'type': 'enabler',
+                    'default': True,
                 },
                 {
                     'name': 'use',
@@ -39,12 +40,19 @@ config = [{
                     'description': 'Starting score for each release found via this provider.',
                 },
                 {
+                    'name': 'custom_tag',
+                    'advanced': True,
+                    'label': 'Custom tag',
+                    'default': ',,,,,',
+                    'description': 'Add custom tags, for example add rls=1 to get only scene releases from nzbs.org',
+                },
+                {
                     'name': 'api_key',
                     'default': ',,,,,',
                     'label': 'Api Key',
                     'description': 'Can be found on your profile page',
                     'type': 'combined',
-                    'combine': ['use', 'host', 'api_key', 'extra_score'],
+                    'combine': ['use', 'host', 'api_key', 'extra_score', 'custom_tag'],
                 },
             ],
         },

@@ -1,4 +1,4 @@
-from couchpotato.core.helpers.encoding import tryUrlencode
+from couchpotato.core.helpers.encoding import tryUrlencode, toUnicode
 from couchpotato.core.helpers.rss import RSS
 from couchpotato.core.helpers.variable import cleanHost, splitString, tryInt
 from couchpotato.core.logger import CPLog
@@ -10,6 +10,7 @@ from urllib2 import HTTPError
 from urlparse import urlparse
 import time
 import traceback
+import urllib2
 
 log = CPLog(__name__)
 
@@ -24,7 +25,7 @@ class Newznab(NZBProvider, RSS):
 
     limits_reached = {}
 
-    http_time_between_calls = 1 # Seconds
+    http_time_between_calls = 1  # Seconds
 
     def search(self, movie, quality):
         hosts = self.getHosts()
@@ -45,7 +46,7 @@ class Newznab(NZBProvider, RSS):
             'imdbid': movie['library']['identifier'].replace('tt', ''),
             'apikey': host['api_key'],
             'extended': 1
-        })
+        }) + ('&%s' % host['custom_tag'] if host.get('custom_tag') else '')
         url = '%s&%s' % (self.getUrl(host['host'], self.urls['search']), arguments)
 
         nzbs = self.getRSSData(url, cache_timeout = 1800, headers = {'User-Agent': Env.getIdentifier()})
@@ -53,10 +54,19 @@ class Newznab(NZBProvider, RSS):
         for nzb in nzbs:
 
             date = None
+            spotter = None
             for item in nzb:
+                if date and spotter:
+                    break
                 if item.attrib.get('name') == 'usenetdate':
                     date = item.attrib.get('value')
                     break
+
+                # Get the name of the person who posts the spot
+                if item.attrib.get('name') == 'poster':
+                    if "@spot.net" in item.attrib.get('value'):
+                        spotter = item.attrib.get('value').split("@")[0]
+                        continue
 
             if not date:
                 date = self.getTextElement(nzb, 'pubDate')
@@ -67,10 +77,15 @@ class Newznab(NZBProvider, RSS):
             if not name:
                 continue
 
+            name_extra = ''
+            if spotter:
+                name_extra = spotter
+
             results.append({
                 'id': nzb_id,
                 'provider_extra': urlparse(host['host']).hostname or host['host'],
-                'name': self.getTextElement(nzb, 'title'),
+                'name': toUnicode(name),
+                'name_extra': name_extra,
                 'age': self.calculateAge(int(time.mktime(parse(date).timetuple()))),
                 'size': int(self.getElement(nzb, 'enclosure').attrib['length']) / 1024 / 1024,
                 'url': (self.getUrl(host['host'], self.urls['download']) % tryUrlencode(nzb_id)) + self.getApiExt(host),
@@ -81,23 +96,38 @@ class Newznab(NZBProvider, RSS):
 
     def getHosts(self):
 
-        uses = splitString(str(self.conf('use')))
-        hosts = splitString(self.conf('host'))
-        api_keys = splitString(self.conf('api_key'))
-        extra_score = splitString(self.conf('extra_score'))
+        uses = splitString(str(self.conf('use')), clean = False)
+        hosts = splitString(self.conf('host'), clean = False)
+        api_keys = splitString(self.conf('api_key'), clean = False)
+        extra_score = splitString(self.conf('extra_score'), clean = False)
+        custom_tags = splitString(self.conf('custom_tag'), clean = False)
 
         list = []
         for nr in range(len(hosts)):
+
+            try: key = api_keys[nr]
+            except: key = ''
+
+            try: host = hosts[nr]
+            except: host = ''
+
+            try: score = tryInt(extra_score[nr])
+            except: score = 0
+
+            try: custom_tag = custom_tags[nr]
+            except: custom_tag = ''
+
             list.append({
                 'use': uses[nr],
-                'host': hosts[nr],
-                'api_key': api_keys[nr],
-                'extra_score': tryInt(extra_score[nr]) if len(extra_score) > nr else 0
+                'host': host,
+                'api_key': key,
+                'extra_score': score,
+                'custom_tag': custom_tag
             })
 
         return list
 
-    def belongsTo(self, url, provider = None):
+    def belongsTo(self, url, provider = None, host = None):
 
         hosts = self.getHosts()
 
@@ -138,10 +168,19 @@ class Newznab(NZBProvider, RSS):
                 return 'try_next'
 
         try:
-            data = self.urlopen(url, show_error = False)
+            # Get final redirected url
+            log.debug('Checking %s for redirects.', url)
+            req = urllib2.Request(url)
+            req.add_header('User-Agent', self.user_agent)
+            res = urllib2.urlopen(req)
+            finalurl = res.geturl()
+            if finalurl != url:
+                log.debug('Redirect url used: %s', finalurl)
+
+            data = self.urlopen(finalurl, show_error = False)
             self.limits_reached[host] = False
             return data
-        except HTTPError, e:
+        except HTTPError as e:
             if e.code == 503:
                 response = e.read().lower()
                 if 'maximum api' in response or 'download limit' in response:

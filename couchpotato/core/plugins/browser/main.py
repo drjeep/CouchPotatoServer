@@ -1,10 +1,10 @@
 from couchpotato.api import addApiView
-from couchpotato.core.helpers.request import getParam, jsonified
 from couchpotato.core.helpers.variable import getUserDir
 from couchpotato.core.plugins.base import Plugin
 import ctypes
 import os
 import string
+import six
 
 if os.name == 'nt':
     import imp
@@ -13,9 +13,9 @@ if os.name == 'nt':
     except:
         # todo:: subclass ImportError for missing dependencies, vs. broken plugins?
         raise ImportError("Missing the win32file module, which is a part of the prerequisite \
-            pywin32 package. You can get it from http://sourceforge.net/projects/pywin32/files/pywin32/");
+            pywin32 package. You can get it from http://sourceforge.net/projects/pywin32/files/pywin32/")
     else:
-        import win32file #@UnresolvedImport
+        import win32file  #@UnresolvedImport
 
 class FileBrowser(Plugin):
 
@@ -63,16 +63,15 @@ class FileBrowser(Plugin):
 
         return driveletters
 
-    def view(self):
+    def view(self, path = '/', show_hidden = True, **kwargs):
 
-        path = getParam('path', '/')
         home = getUserDir()
 
         if not path:
             path = home
 
         try:
-            dirs = self.getDirectories(path = path, show_hidden = getParam('show_hidden', True))
+            dirs = self.getDirectories(path = path, show_hidden = show_hidden)
         except:
             dirs = []
 
@@ -82,14 +81,14 @@ class FileBrowser(Plugin):
         elif parent != '/' and parent[-2:] != ':\\':
             parent += os.path.sep
 
-        return jsonified({
+        return {
             'is_root': path == '/',
             'empty': len(dirs) == 0,
             'parent': parent,
             'home': home + os.path.sep,
             'platform': os.name,
             'dirs': dirs,
-        })
+        }
 
 
     def is_hidden(self, filepath):
@@ -98,7 +97,7 @@ class FileBrowser(Plugin):
 
     def has_hidden_attribute(self, filepath):
         try:
-            attrs = ctypes.windll.kernel32.GetFileAttributesW(unicode(filepath)) #@UndefinedVariable
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(six.text_type(filepath)) #@UndefinedVariable
             assert attrs != -1
             result = bool(attrs & 2)
         except (AttributeError, AssertionError):

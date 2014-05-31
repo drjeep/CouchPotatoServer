@@ -1,6 +1,5 @@
 from couchpotato.api import addApiView
 from couchpotato.core.event import addEvent
-from couchpotato.core.helpers.request import jsonified
 from couchpotato.core.logger import CPLog
 from couchpotato.core.providers.base import Provider
 from couchpotato.environment import Env
@@ -18,7 +17,7 @@ class Notification(Provider):
     listen_to = [
         'renamer.after', 'movie.snatched',
         'updater.available', 'updater.updated',
-        'core.message',
+        'core.message.important',
     ]
     dont_listen_to = []
 
@@ -33,7 +32,9 @@ class Notification(Provider):
                 addEvent(listener, self.createNotifyHandler(listener))
 
     def createNotifyHandler(self, listener):
-        def notify(message = None, group = {}, data = None):
+        def notify(message = None, group = None, data = None):
+            if not group: group = {}
+
             if not self.conf('on_snatch', default = True) and listener == 'movie.snatched':
                 return
             return self._notify(message = message, data = data if data else group, listener = listener)
@@ -46,11 +47,12 @@ class Notification(Provider):
     def _notify(self, *args, **kwargs):
         if self.isEnabled():
             return self.notify(*args, **kwargs)
+        return False
 
-    def notify(self, message = '', data = {}, listener = None):
-        pass
+    def notify(self, message = '', data = None, listener = None):
+        if not data: data = {}
 
-    def test(self):
+    def test(self, **kwargs):
 
         test_type = self.testNotifyName()
 
@@ -62,7 +64,9 @@ class Notification(Provider):
             listener = 'test'
         )
 
-        return jsonified({'success': success})
+        return {
+            'success': success
+        }
 
     def testNotifyName(self):
         return 'notify.%s.test' % self.getName().lower()

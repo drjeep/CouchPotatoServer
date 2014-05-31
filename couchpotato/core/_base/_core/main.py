@@ -1,6 +1,5 @@
 from couchpotato.api import addApiView
 from couchpotato.core.event import fireEvent, addEvent
-from couchpotato.core.helpers.request import jsonified
 from couchpotato.core.helpers.variable import cleanHost, md5
 from couchpotato.core.logger import CPLog
 from couchpotato.core.plugins.base import Plugin
@@ -56,8 +55,12 @@ class Core(Plugin):
         if not Env.get('desktop'):
             self.signalHandler()
 
+        # Set default urlopen timeout
+        import socket
+        socket.setdefaulttimeout(30)
+
     def md5Password(self, value):
-        return md5(value.encode(Env.get('encoding'))) if value else ''
+        return md5(value) if value else ''
 
     def checkApikey(self, value):
         return value if value and len(value) > 3 else uuid4().hex
@@ -68,12 +71,12 @@ class Core(Plugin):
 
         return True
 
-    def available(self):
-        return jsonified({
+    def available(self, **kwargs):
+        return {
             'success': True
-        })
+        }
 
-    def shutdown(self):
+    def shutdown(self, **kwargs):
         if self.shutdown_started:
             return False
 
@@ -83,7 +86,7 @@ class Core(Plugin):
 
         return 'shutdown'
 
-    def restart(self):
+    def restart(self, **kwargs):
         if self.shutdown_started:
             return False
 
@@ -114,7 +117,7 @@ class Core(Plugin):
 
             if len(still_running) == 0:
                 break
-            elif starttime < time.time() - 30: # Always force break after 30s wait
+            elif starttime < time.time() - 30:  # Always force break after 30s wait
                 break
 
             running = list(set(still_running) - set(self.ignore_restart))
@@ -125,7 +128,7 @@ class Core(Plugin):
 
             time.sleep(1)
 
-        log.debug('Save to shutdown/restart')
+        log.debug('Safe to shutdown/restart')
 
         try:
             IOLoop.current().stop()
@@ -156,10 +159,10 @@ class Core(Plugin):
             host = 'localhost'
         port = Env.setting('port')
 
-        return '%s:%d%s' % (cleanHost(host).rstrip('/'), int(port), '/' + Env.setting('url_base').lstrip('/') if Env.setting('url_base') else '')
+        return '%s:%d%s' % (cleanHost(host).rstrip('/'), int(port), Env.get('web_base'))
 
     def createApiUrl(self):
-        return '%s/api/%s' % (self.createBaseUrl(), Env.setting('api_key'))
+        return '%sapi/%s' % (self.createBaseUrl(), Env.setting('api_key'))
 
     def version(self):
         ver = fireEvent('updater.info', single = True)
@@ -170,10 +173,10 @@ class Core(Plugin):
 
         return '%s - %s-%s - v2' % (platf, ver.get('version')['type'], ver.get('version')['hash'])
 
-    def versionView(self):
-        return jsonified({
+    def versionView(self, **kwargs):
+        return {
             'version': self.version()
-        })
+        }
 
     def signalHandler(self):
         if Env.get('daemonized'): return

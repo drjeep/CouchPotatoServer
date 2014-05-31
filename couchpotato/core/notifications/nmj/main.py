@@ -1,7 +1,6 @@
 from couchpotato.api import addApiView
 from couchpotato.core.event import addEvent
 from couchpotato.core.helpers.encoding import tryUrlencode
-from couchpotato.core.helpers.request import getParams, jsonified
 from couchpotato.core.logger import CPLog
 from couchpotato.core.notifications.base import Notification
 import re
@@ -22,21 +21,17 @@ class NMJ(Notification):
         addApiView(self.testNotifyName(), self.test)
         addApiView('notify.nmj.auto_config', self.autoConfig)
 
-    def autoConfig(self):
+    def autoConfig(self, host = 'localhost', **kwargs):
 
-        params = getParams()
-        host = params.get('host', 'localhost')
-
-        database = ''
         mount = ''
 
         try:
             terminal = telnetlib.Telnet(host)
         except Exception:
-            log.error('Warning: unable to get a telnet session to %s', (host))
+            log.error('Warning: unable to get a telnet session to %s', host)
             return self.failed()
 
-        log.debug('Connected to %s via telnet', (host))
+        log.debug('Connected to %s via telnet', host)
         terminal.read_until('sh-3.00# ')
         terminal.write('cat /tmp/source\n')
         terminal.write('cat /tmp/netshare\n')
@@ -50,7 +45,7 @@ class NMJ(Notification):
             device = match.group(2)
             log.info('Found NMJ database %s on device %s', (database, device))
         else:
-            log.error('Could not get current NMJ database on %s, NMJ is probably not running!', (host))
+            log.error('Could not get current NMJ database on %s, NMJ is probably not running!', host)
             return self.failed()
 
         if device.startswith('NETWORK_SHARE/'):
@@ -58,28 +53,29 @@ class NMJ(Notification):
 
             if match:
                 mount = match.group().replace('127.0.0.1', host)
-                log.info('Found mounting url on the Popcorn Hour in configuration: %s', (mount))
+                log.info('Found mounting url on the Popcorn Hour in configuration: %s', mount)
             else:
                 log.error('Detected a network share on the Popcorn Hour, but could not get the mounting url')
                 return self.failed()
 
-        return jsonified({
+        return {
             'success': True,
             'database': database,
             'mount': mount,
-        })
+        }
 
-    def addToLibrary(self, message = None, group = {}):
+    def addToLibrary(self, message = None, group = None):
         if self.isDisabled(): return
+        if not group: group = {}
 
         host = self.conf('host')
         mount = self.conf('mount')
         database = self.conf('database')
 
         if mount:
-            log.debug('Try to mount network drive via url: %s', (mount))
+            log.debug('Try to mount network drive via url: %s', mount)
             try:
-                data = self.urlopen(mount)
+                self.urlopen(mount)
             except:
                 return False
 
@@ -90,32 +86,35 @@ class NMJ(Notification):
             'arg3': '',
         }
         params = tryUrlencode(params)
-        UPDATE_URL = 'http://%(host)s:8008/metadata_database?%(params)s'
-        updateUrl = UPDATE_URL % {'host': host, 'params': params}
+        update_url = 'http://%(host)s:8008/metadata_database?%(params)s' % {'host': host, 'params': params}
 
         try:
-            response = self.urlopen(updateUrl)
+            response = self.urlopen(update_url)
         except:
             return False
 
         try:
             et = etree.fromstring(response)
             result = et.findtext('returnValue')
-        except SyntaxError, e:
-            log.error('Unable to parse XML returned from the Popcorn Hour: %s', (e))
+        except SyntaxError as e:
+            log.error('Unable to parse XML returned from the Popcorn Hour: %s', e)
             return False
 
         if int(result) > 0:
-            log.error('Popcorn Hour returned an errorcode: %s', (result))
+            log.error('Popcorn Hour returned an errorcode: %s', result)
             return False
         else:
             log.info('NMJ started background scan')
             return True
 
     def failed(self):
-        return jsonified({'success': False})
+        return {
+            'success': False
+        }
 
-    def test(self):
-        return jsonified({'success': self.addToLibrary()})
+    def test(self, **kwargs):
+        return {
+            'success': self.addToLibrary()
+        }
 
 

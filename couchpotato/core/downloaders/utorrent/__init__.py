@@ -1,5 +1,6 @@
 from .main import uTorrent
 
+
 def start():
     return uTorrent()
 
@@ -11,7 +12,7 @@ config = [{
             'list': 'download_providers',
             'name': 'utorrent',
             'label': 'uTorrent',
-            'description': 'Use <a href="http://www.utorrent.com/" target="_blank">uTorrent</a> to download torrents.',
+            'description': 'Use <a href="http://www.utorrent.com/" target="_blank">uTorrent</a> (3.0+) to download torrents.',
             'wizard': True,
             'options': [
                 {
@@ -23,7 +24,7 @@ config = [{
                 {
                     'name': 'host',
                     'default': 'localhost:8000',
-                    'description': 'Hostname with port. Usually <strong>localhost:8000</strong>',
+                    'description': 'Port can be found in settings when enabling WebUI.',
                 },
                 {
                     'name': 'username',
@@ -37,8 +38,25 @@ config = [{
                     'description': 'Label to add torrent as.',
                 },
                 {
+                    'name': 'remove_complete',
+                    'label': 'Remove torrent',
+                    'default': True,
+                    'advanced': True,
+                    'type': 'bool',
+                    'description': 'Remove the torrent from uTorrent after it finished seeding.',
+                },
+                {
+                    'name': 'delete_files',
+                    'label': 'Remove files',
+                    'default': True,
+                    'type': 'bool',
+                    'advanced': True,
+                    'description': 'Also remove the leftover files.',
+                },
+                {
                     'name': 'paused',
                     'type': 'bool',
+                    'advanced': True,
                     'default': False,
                     'description': 'Add the torrent paused.',
                 },
@@ -48,6 +66,13 @@ config = [{
                     'type': 'bool',
                     'advanced': True,
                     'description': 'Disable this downloader for automated searches, but use it when I manually send a release.',
+                },
+                {
+                    'name': 'delete_failed',
+                    'default': True,
+                    'advanced': True,
+                    'type': 'bool',
+                    'description': 'Delete a release after the download has failed.',
                 },
             ],
         }

@@ -1,5 +1,6 @@
 from .main import NZBVortex
 
+
 def start():
     return NZBVortex()
 
@@ -22,7 +23,15 @@ config = [{
                 },
                 {
                     'name': 'host',
-                    'default': 'https://localhost:4321',
+                    'default': 'localhost:4321',
+                    'description': 'Hostname with port. Usually <strong>localhost:4321</strong>',
+                },
+                {
+                    'name': 'ssl',
+                    'default': 1,
+                    'type': 'bool',
+                    'advanced': True,
+                    'description': 'Use HyperText Transfer Protocol Secure, or <strong>https</strong>',
                 },
                 {
                     'name': 'api_key',
@@ -38,6 +47,7 @@ config = [{
                 {
                     'name': 'delete_failed',
                     'default': True,
+                    'advanced': True,
                     'type': 'bool',
                     'description': 'Delete a release after the download has failed.',
                 },

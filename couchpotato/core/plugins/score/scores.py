@@ -1,8 +1,13 @@
 from couchpotato.core.event import fireEvent
 from couchpotato.core.helpers.encoding import simplifyString
 from couchpotato.core.helpers.variable import tryInt
+from couchpotato.core.logger import CPLog
 from couchpotato.environment import Env
 import re
+import traceback
+
+log = CPLog(__name__)
+
 
 name_scores = [
     # Tags
@@ -23,8 +28,8 @@ name_scores = [
 ]
 
 
-def nameScore(name, year):
-    ''' Calculate score for words in the NZB name '''
+def nameScore(name, year, preferred_words):
+    """ Calculate score for words in the NZB name """
 
     score = 0
     name = name.lower()
@@ -34,18 +39,15 @@ def nameScore(name, year):
         v = value.split(':')
         add = int(v.pop())
         if v.pop() in name:
-            score = score + add
+            score += add
 
     # points if the year is correct
     if str(year) in name:
-        score = score + 5
+        score += 5
 
     # Contains preferred word
     nzb_words = re.split('\W+', simplifyString(name))
-    preferred_words = [x.strip() for x in Env.setting('preferred_words', section = 'searcher').split(',')]
-    for word in preferred_words:
-        if word.strip() and word.strip().lower() in nzb_words:
-            score = score + 100
+    score += 100 * len(list(set(nzb_words) & set(preferred_words)))
 
     return score
 
@@ -72,9 +74,12 @@ def namePositionScore(nzb_name, movie_name):
     name_year = fireEvent('scanner.name_year', nzb_name, single = True)
 
     # Give points for movies beginning with the correct name
-    name_split = simplifyString(nzb_name).split(simplifyString(movie_name))
-    if name_split[0].strip() == '':
-        score += 10
+    split_by = simplifyString(movie_name)
+    name_split = []
+    if len(split_by) > 0:
+        name_split = simplifyString(nzb_name).split(split_by)
+        if name_split[0].strip() == '':
+            score += 10
 
     # If year is second in line, give more points
     if len(name_split) > 1 and name_year:
@@ -136,12 +141,10 @@ def duplicateScore(nzb_name, movie_name):
     return len(list(set(duplicates) - set(movie_words))) * -4
 
 
-def partialIgnoredScore(nzb_name, movie_name):
+def partialIgnoredScore(nzb_name, movie_name, ignored_words):
 
     nzb_name = nzb_name.lower()
     movie_name = movie_name.lower()
-
-    ignored_words = [x.strip().lower() for x in Env.setting('ignored_words', section = 'searcher').split(',')]
 
     score = 0
     for ignored_word in ignored_words:
@@ -149,6 +152,7 @@ def partialIgnoredScore(nzb_name, movie_name):
             score -= 5
 
     return score
+
 
 def halfMultipartScore(nzb_name):
 
@@ -160,5 +164,40 @@ def halfMultipartScore(nzb_name):
 
     if wrong_found == 1:
         return -30
+
+    return 0
+
+
+def sceneScore(nzb_name):
+
+    check_names = [nzb_name]
+
+    # Match names between "
+    try: check_names.append(re.search(r'([\'"])[^\1]*\1', nzb_name).group(0))
+    except: pass
+
+    # Match longest name between []
+    try: check_names.append(max(re.findall(r'[^[]*\[([^]]*)\]', nzb_name), key = len).strip())
+    except: pass
+
+    for name in check_names:
+
+        # Strip twice, remove possible file extensions
+        name = name.lower().strip(' "\'\.-_\[\]')
+        name = re.sub('\.([a-z0-9]{0,4})$', '', name)
+        name = name.strip(' "\'\.-_\[\]')
+
+        # Make sure year and groupname is in there
+        year = re.findall('(?P<year>19[0-9]{2}|20[0-9]{2})', name)
+        group = re.findall('\-([a-z0-9]+)$', name)
+
+        if len(year) > 0 and len(group) > 0:
+            try:
+                validate = fireEvent('release.validate', name, single = True)
+                if validate and tryInt(validate.get('score')) != 0:
+                    log.debug('Release "%s" scored %s, reason: %s', (nzb_name, validate['score'], validate['reasons']))
+                    return tryInt(validate.get('score'))
+            except:
+                log.error('Failed scoring scene: %s', traceback.format_exc())
 
     return 0

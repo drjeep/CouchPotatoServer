@@ -5,7 +5,7 @@ Page.Manage = new Class({
 	name: 'manage',
 	title: 'Do stuff to your existing movies!',
 
-	indexAction: function(param){
+	indexAction: function(){
 		var self = this;
 
 		if(!self.list){
@@ -73,7 +73,7 @@ Page.Manage = new Class({
 				'data': {
 					'full': +full
 				}
-			})
+			});
 
 			self.startProgressInterval();
 
@@ -86,9 +86,12 @@ Page.Manage = new Class({
 
 		self.progress_interval = setInterval(function(){
 
-			Api.request('manage.progress', {
+			if(self.progress_request && self.progress_request.running)
+				return;
+
+			self.update_in_progress = true;
+			self.progress_request = Api.request('manage.progress', {
 				'onComplete': function(json){
-					self.update_in_progress = true;
 
 					if(!json || !json.progress){
 						clearInterval(self.progress_interval);
@@ -99,15 +102,27 @@ Page.Manage = new Class({
 						}
 					}
 					else {
+						// Capture progress so we can use it in our *each* closure
+						var progress = json.progress
+
+						// Don't add loader when page is loading still
+						if(!self.list.navigation)
+							return;
+
 						if(!self.progress_container)
-							self.progress_container = new Element('div.progress').inject(self.list.navigation, 'after')
+							self.progress_container = new Element('div.progress').inject(self.list.navigation, 'after');
 
 						self.progress_container.empty();
 
-						Object.each(json.progress, function(progress, folder){
+						var sorted_table = self.parseProgress(json.progress)
+
+						sorted_table.each(function(folder){
+							var folder_progress = progress[folder]
 							new Element('div').adopt(
-								new Element('span.folder', {'text': folder}),
-								new Element('span.percentage', {'text': progress.total ? (((progress.total-progress.to_go)/progress.total)*100).round() + '%' : '0%'})
+								new Element('span.folder', {'text': folder +
+									(folder_progress.eta > 0 ? ', ' + new Date ().increment('second', folder_progress.eta).timeDiffInWords().replace('from now', 'to go') : '')
+								}),
+								new Element('span.percentage', {'text': folder_progress.total ? (((folder_progress.total-folder_progress.to_go)/folder_progress.total)*100).round() + '%' : '0%'})
 							).inject(self.progress_container)
 						});
 
@@ -116,7 +131,17 @@ Page.Manage = new Class({
 			})
 
 		}, 1000);
+	},
 
+	parseProgress: function (progress_object) {
+		var folder, temp_array = [];
+
+		for (folder in progress_object) {
+			if (progress_object.hasOwnProperty(folder)) {
+				temp_array.push(folder)
+			}
+		}
+		return temp_array.stableSort()
 	}
 
 });

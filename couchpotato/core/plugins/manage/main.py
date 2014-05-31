@@ -1,8 +1,7 @@
 from couchpotato.api import addApiView
 from couchpotato.core.event import fireEvent, addEvent, fireEventAsync
-from couchpotato.core.helpers.encoding import ss
-from couchpotato.core.helpers.request import jsonified, getParam
-from couchpotato.core.helpers.variable import splitString, getTitle
+from couchpotato.core.helpers.encoding import sp
+from couchpotato.core.helpers.variable import splitString, getTitle, tryInt
 from couchpotato.core.logger import CPLog
 from couchpotato.core.plugins.base import Plugin
 from couchpotato.environment import Env
@@ -14,6 +13,7 @@ import traceback
 
 
 log = CPLog(__name__)
+
 
 class Manage(Plugin):
 
@@ -27,7 +27,8 @@ class Manage(Plugin):
         addEvent('manage.diskspace', self.getDiskSpace)
 
         # Add files after renaming
-        def after_rename(message = None, group = {}):
+        def after_rename(message = None, group = None):
+            if not group: group = {}
             return self.scanFilesToLibrary(folder = group['destination_dir'], files = group['renamed_files'])
         addEvent('renamer.after', after_rename, priority = 110)
 
@@ -45,25 +46,25 @@ class Manage(Plugin):
 }"""},
         })
 
-        if not Env.get('dev'):
-            def updateLibrary():
-                self.updateLibrary(full = False)
-            addEvent('app.load', updateLibrary)
+        if not Env.get('dev') and self.conf('startup_scan'):
+            addEvent('app.load', self.updateLibraryQuick)
 
-    def getProgress(self):
-        return jsonified({
+    def getProgress(self, **kwargs):
+        return {
             'progress': self.in_progress
-        })
+        }
 
-    def updateLibraryView(self):
+    def updateLibraryView(self, full = 1, **kwargs):
 
-        full = getParam('full', default = 1)
         fireEventAsync('manage.update', full = True if full == '1' else False)
 
-        return jsonified({
+        return {
+            'progress': self.in_progress,
             'success': True
-        })
+        }
 
+    def updateLibraryQuick(self):
+        return self.updateLibrary(full = False)
 
     def updateLibrary(self, full = True):
         last_update = float(Env.prop('manage.last_update', default = 0))
@@ -80,18 +81,21 @@ class Manage(Plugin):
         try:
 
             directories = self.directories()
+            directories.sort()
             added_identifiers = []
 
             # Add some progress
-            self.in_progress = {}
             for directory in directories:
                 self.in_progress[os.path.normpath(directory)] = {
+                    'started': False,
+                    'eta': -1,
                     'total': None,
                     'to_go': None,
                 }
 
             for directory in directories:
                 folder = os.path.normpath(directory)
+                self.in_progress[os.path.normpath(directory)]['started'] = tryInt(time.time())
 
                 if not os.path.isdir(folder):
                     if len(directory) > 0:
@@ -100,6 +104,7 @@ class Manage(Plugin):
 
                 log.info('Updating manage library: %s', folder)
                 fireEvent('notify.frontend', type = 'manage.update', data = True, message = 'Scanning for movies in "%s"' % folder)
+
 
                 onFound = self.createAddToLibrary(folder, added_identifiers)
                 fireEvent('scanner.scan', folder = folder, simple = True, newer_than = last_update if not full else 0, on_found = onFound, single = True)
@@ -112,27 +117,27 @@ class Manage(Plugin):
             if self.conf('cleanup') and full and not self.shuttingDown():
 
                 # Get movies with done status
-                total_movies, done_movies = fireEvent('movie.list', status = 'done', single = True)
+                total_movies, done_movies = fireEvent('media.list', types = 'movie', status = 'done', single = True)
 
                 for done_movie in done_movies:
                     if done_movie['library']['identifier'] not in added_identifiers:
-                        fireEvent('movie.delete', movie_id = done_movie['id'], delete_from = 'all')
+                        fireEvent('media.delete', media_id = done_movie['id'], delete_from = 'all')
                     else:
 
-                        for release in done_movie.get('releases', []):
-                            if len(release.get('files', [])) == 0:
-                                fireEvent('release.delete', release['id'])
-                            else:
+                        releases = fireEvent('release.for_movie', id = done_movie.get('id'), single = True)
+
+                        for release in releases:
+                            if len(release.get('files', [])) > 0:
                                 for release_file in release.get('files', []):
                                     # Remove release not available anymore
-                                    if not os.path.isfile(ss(release_file['path'])):
+                                    if not os.path.isfile(sp(release_file['path'])):
                                         fireEvent('release.clean', release['id'])
                                         break
 
                         # Check if there are duplicate releases (different quality) use the last one, delete the rest
-                        if len(done_movie.get('releases', [])) > 1:
+                        if len(releases) > 1:
                             used_files = {}
-                            for release in done_movie.get('releases', []):
+                            for release in releases:
 
                                 for release_file in release.get('files', []):
                                     already_used = used_files.get(release_file['path'])
@@ -171,12 +176,13 @@ class Manage(Plugin):
         self.in_progress = False
 
     def createAddToLibrary(self, folder, added_identifiers = []):
+
         def addToLibrary(group, total_found, to_go):
             if self.in_progress[folder]['total'] is None:
-                self.in_progress[folder] = {
+                self.in_progress[folder].update({
                     'total': total_found,
                     'to_go': total_found,
-                }
+                })
 
             if group['library'] and group['library'].get('identifier'):
                 identifier = group['library'].get('identifier')
@@ -184,9 +190,9 @@ class Manage(Plugin):
 
                 # Add it to release and update the info
                 fireEvent('release.add', group = group)
-                fireEventAsync('library.update', identifier = identifier, on_complete = self.createAfterUpdate(folder, identifier))
+                fireEvent('library.update.movie', identifier = identifier, on_complete = self.createAfterUpdate(folder, identifier))
             else:
-                self.in_progress[folder]['to_go'] = self.in_progress[folder]['to_go'] - 1
+                self.updateProgress(folder)
 
         return addToLibrary
 
@@ -194,13 +200,25 @@ class Manage(Plugin):
 
         # Notify frontend
         def afterUpdate():
-            self.in_progress[folder]['to_go'] = self.in_progress[folder]['to_go'] - 1
+            if not self.in_progress or self.shuttingDown():
+                return
+
+            self.updateProgress(folder)
             total = self.in_progress[folder]['total']
-            movie_dict = fireEvent('movie.get', identifier, single = True)
+            movie_dict = fireEvent('media.get', identifier, single = True)
 
             fireEvent('notify.frontend', type = 'movie.added', data = movie_dict, message = None if total > 5 else 'Added "%s" to manage.' % getTitle(movie_dict['library']))
 
         return afterUpdate
+
+    def updateProgress(self, folder):
+
+        pr = self.in_progress[folder]
+        pr['to_go'] -= 1
+
+        avg = (time.time() - pr['started'])/(pr['total'] - pr['to_go'])
+        pr['eta'] = tryInt(avg * pr['to_go'])
+
 
     def directories(self):
         try:
@@ -217,9 +235,10 @@ class Manage(Plugin):
 
         groups = fireEvent('scanner.scan', folder = folder, files = files, single = True)
 
-        for group in groups.itervalues():
-            if group['library'] and group['library'].get('identifier'):
-                fireEvent('release.add', group = group)
+        if groups:
+            for group in groups.values():
+                if group['library'] and group['library'].get('identifier'):
+                    fireEvent('release.add', group = group)
 
     def getDiskSpace(self):
 

@@ -11,7 +11,8 @@ class Pushover(Notification):
 
     app_token = 'YkxHMYDZp285L265L3IwH3LmzkTaCy'
 
-    def notify(self, message = '', data = {}, listener = None):
+    def notify(self, message = '', data = None, listener = None):
+        if not data: data = {}
 
         http_handler = HTTPSConnection("api.pushover.net:443")
 
@@ -23,15 +24,15 @@ class Pushover(Notification):
         }
 
         if data and data.get('library'):
-            api_data.extend({
+            api_data.update({
                 'url': toUnicode('http://www.imdb.com/title/%s/' % data['library']['identifier']),
                 'url_title': toUnicode('%s on IMDb' % getTitle(data['library'])),
             })
 
         http_handler.request('POST',
-            "/1/messages.json",
-            headers = {'Content-type': 'application/x-www-form-urlencoded'},
-            body = tryUrlencode(api_data)
+                             "/1/messages.json",
+                             headers = {'Content-type': 'application/x-www-form-urlencoded'},
+                             body = tryUrlencode(api_data)
         )
 
         response = http_handler.getresponse()

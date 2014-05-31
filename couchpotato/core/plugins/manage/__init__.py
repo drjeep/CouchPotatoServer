@@ -1,5 +1,6 @@
 from .main import Manage
 
+
 def start():
     return Manage()
 
@@ -27,6 +28,14 @@ config = [{
                     'type': 'bool',
                     'description': 'Remove movie from db if it can\'t be found after re-scan.',
                     'default': True,
+                },
+                {
+                    'label': 'Scan at startup',
+                    'name': 'startup_scan',
+                    'type': 'bool',
+                    'default': True,
+                    'advanced': True,
+                    'description': 'Do a quick scan on startup. On slow systems better disable this.',
                 },
             ],
         },

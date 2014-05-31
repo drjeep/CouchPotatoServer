@@ -19,11 +19,11 @@ class NzbIndex(NZBProvider, RSS):
         'search': 'https://www.nzbindex.com/rss/?%s',
     }
 
-    http_time_between_calls = 1 # Seconds
+    http_time_between_calls = 1  # Seconds
 
     def _searchOnTitle(self, title, movie, quality, results):
 
-        q = '"%s %s"' % (title, movie['library']['year'])
+        q = '"%s %s" | "%s (%s)"' % (title, movie['library']['year'], title, movie['library']['year'])
         arguments = tryUrlencode({
             'q': q,
             'age': Env.setting('retention', 'nzb'),

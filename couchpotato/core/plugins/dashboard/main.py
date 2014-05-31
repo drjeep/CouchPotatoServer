@@ -1,13 +1,15 @@
+from datetime import date
 from couchpotato import get_session
 from couchpotato.api import addApiView
 from couchpotato.core.event import fireEvent
-from couchpotato.core.helpers.request import jsonified, getParams
 from couchpotato.core.helpers.variable import splitString, tryInt
 from couchpotato.core.logger import CPLog
 from couchpotato.core.plugins.base import Plugin
-from couchpotato.core.settings.model import Movie
+from couchpotato.core.settings.model import Media, Library, LibraryTitle, \
+    Release
 from sqlalchemy.orm import joinedload_all
-import random
+from sqlalchemy.sql.expression import asc, or_
+import random as rndm
 import time
 
 log = CPLog(__name__)
@@ -16,41 +18,10 @@ log = CPLog(__name__)
 class Dashboard(Plugin):
 
     def __init__(self):
-
-        addApiView('dashboard.suggestions', self.suggestView)
         addApiView('dashboard.soon', self.getSoonView)
 
-    def newSuggestions(self):
+    def getSoonView(self, limit_offset = None, random = False, late = False, **kwargs):
 
-        movies = fireEvent('movie.list', status = ['active', 'done'], limit_offset = (20, 0), single = True)
-        movie_identifiers = [m['library']['identifier'] for m in movies[1]]
-
-        ignored_movies = fireEvent('movie.list', status = ['ignored', 'deleted'], limit_offset = (100, 0), single = True)
-        ignored_identifiers = [m['library']['identifier'] for m in ignored_movies[1]]
-
-        suggestions = fireEvent('movie.suggest', movies = movie_identifiers, ignore = ignored_identifiers, single = True)
-        suggest_status = fireEvent('status.get', 'suggest', single = True)
-
-        for suggestion in suggestions:
-            fireEvent('movie.add', params = {'identifier': suggestion}, force_readd = False, search_after = False, status_id = suggest_status.get('id'))
-
-    def suggestView(self):
-
-        db = get_session()
-
-        movies = db.query(Movie).limit(20).all()
-        identifiers = [m.library.identifier for m in movies]
-
-        suggestions = fireEvent('movie.suggest', movies = identifiers, single = True)
-
-        return jsonified({
-            'result': True,
-            'suggestions': suggestions
-        })
-
-    def getSoonView(self):
-
-        params = getParams()
         db = get_session()
         now = time.time()
 
@@ -72,63 +43,88 @@ class Dashboard(Plugin):
 
             profile_pre[profile.get('id')] = contains
 
-        # Get all active movies
-        active_status = fireEvent('status.get', 'active', single = True)
-        subq = db.query(Movie).filter(Movie.status_id == active_status.get('id')).subquery()
-
-        q = db.query(Movie).join((subq, subq.c.id == Movie.id)) \
-            .options(joinedload_all('releases')) \
-            .options(joinedload_all('profile.types')) \
-            .options(joinedload_all('library.titles')) \
-            .options(joinedload_all('library.files')) \
-            .options(joinedload_all('status')) \
-            .options(joinedload_all('files'))
-
         # Add limit
-        limit_offset = params.get('limit_offset')
         limit = 12
         if limit_offset:
             splt = splitString(limit_offset) if isinstance(limit_offset, (str, unicode)) else limit_offset
             limit = tryInt(splt[0])
 
-        all_movies = q.all()
+        # Get all active movies
+        active_status, ignored_status = fireEvent('status.get', ['active', 'ignored'], single = True)
+        q = db.query(Media) \
+            .join(Library) \
+            .outerjoin(Media.releases) \
+            .filter(Media.status_id == active_status.get('id')) \
+            .with_entities(Media.id, Media.profile_id, Library.info, Library.year) \
+            .group_by(Media.id) \
+            .filter(or_(Release.id == None, Release.status_id == ignored_status.get('id')))
 
-        if params.get('random', False):
-            random.shuffle(all_movies)
+        if not random:
+            q = q.join(LibraryTitle) \
+                .filter(LibraryTitle.default == True) \
+                .order_by(asc(LibraryTitle.simple_title))
 
+        active = q.all()
         movies = []
-        for movie in all_movies:
-            pp = profile_pre.get(movie.profile.id)
-            eta = movie.library.info.get('release_date', {}) or {}
-            coming_soon = False
+        now_year = date.today().year
 
-            # Theater quality
-            if pp.get('theater') and fireEvent('searcher.could_be_released', True, eta, single = True):
-                coming_soon = True
-            if pp.get('dvd') and fireEvent('searcher.could_be_released', False, eta, single = True):
-                coming_soon = True
+        if len(active) > 0:
 
+            # Do the shuffle
+            if random:
+                rndm.shuffle(active)
 
-            if coming_soon:
-                temp = movie.to_dict({
-                    'profile': {'types': {}},
-                    'releases': {'files':{}, 'info': {}},
-                    'library': {'titles': {}, 'files':{}},
-                    'files': {},
-                })
+            movie_ids = []
+            for movie in active:
+                movie_id, profile_id, info, year = movie
 
-                # Don't list older movies
-                if ((not params.get('late') and (not eta.get('dvd') or (eta.get('dvd') and eta.get('dvd') > (now - 2419200)))) or \
-                        (params.get('late') and eta.get('dvd') and eta.get('dvd') < (now - 2419200))):
-                    movies.append(temp)
+                pp = profile_pre.get(profile_id)
+                if not pp: continue
 
-                if len(movies) >= limit:
-                    break
+                eta = info.get('release_date', {}) or {}
+                coming_soon = False
 
-        return jsonified({
+                # Theater quality
+                if pp.get('theater') and fireEvent('movie.searcher.could_be_released', True, eta, year, single = True):
+                    coming_soon = True
+                elif pp.get('dvd') and fireEvent('movie.searcher.could_be_released', False, eta, year, single = True):
+                    coming_soon = True
+
+                if coming_soon:
+
+                    # Don't list older movies
+                    if ((not late and (year >= now_year-1) and (not eta.get('dvd') and not eta.get('theater') or eta.get('dvd') and eta.get('dvd') > (now - 2419200))) or
+                            (late and ((year < now_year-1) or ((eta.get('dvd', 0) > 0 or eta.get('theater')) and eta.get('dvd') < (now - 2419200))))):
+                        movie_ids.append(movie_id)
+
+                        if len(movie_ids) >= limit:
+                            break
+
+            if len(movie_ids) > 0:
+
+                # Get all movie information
+                movies_raw = db.query(Media) \
+                    .options(joinedload_all('library.titles')) \
+                    .options(joinedload_all('library.files')) \
+                    .options(joinedload_all('files')) \
+                    .filter(Media.id.in_(movie_ids)) \
+                    .all()
+
+                # Create dict by movie id
+                movie_dict = {}
+                for movie in movies_raw:
+                    movie_dict[movie.id] = movie
+
+                for movie_id in movie_ids:
+                    movies.append(movie_dict[movie_id].to_dict({
+                        'library': {'titles': {}, 'files': {}},
+                        'files': {},
+                    }))
+
+        return {
             'success': True,
             'empty': len(movies) == 0,
             'movies': movies,
-        })
+        }
 
     getLateView = getSoonView

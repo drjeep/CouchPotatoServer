@@ -18,7 +18,7 @@ class BinSearch(NZBProvider):
         'search': 'https://www.binsearch.info/index.php?%s',
     }
 
-    http_time_between_calls = 4 # Seconds
+    http_time_between_calls = 4  # Seconds
 
     def _search(self, movie, quality, results):
 
@@ -56,12 +56,16 @@ class BinSearch(NZBProvider):
                     info = row.find('span', attrs = {'class':'d'})
                     size_match = re.search('size:.(?P<size>[0-9\.]+.[GMB]+)', info.text)
 
+                    age = 0
+                    try: age = re.search('(?P<size>\d+d)', row.find_all('td')[-1:][0].text).group('size')[:-1]
+                    except: pass
+
                     def extra_check(item):
                         parts = re.search('available:.(?P<parts>\d+)./.(?P<total>\d+)', info.text)
                         total = tryInt(parts.group('total'))
                         parts = tryInt(parts.group('parts'))
 
-                        if (total / parts) < 0.95 or ((total / parts) >= 0.95 and not 'par2' in info.text.lower()):
+                        if (total / parts) < 0.95 or ((total / parts) >= 0.95 and not ('par2' in info.text.lower() or 'pa3' in info.text.lower())):
                             log.info2('Wrong: \'%s\', not complete: %s out of %s', (item['name'], parts, total))
                             return False
 
@@ -74,7 +78,7 @@ class BinSearch(NZBProvider):
                     results.append({
                         'id': nzb_id,
                         'name': title.text,
-                        'age': tryInt(re.search('(?P<size>\d+d)', row.find_all('td')[-1:][0].text).group('size')[:-1]),
+                        'age': tryInt(age),
                         'size': self.parseSize(size_match.group('size')),
                         'url': self.urls['download'] % nzb_id,
                         'detail_url': self.urls['detail'] % info.find('a')['href'],
@@ -86,11 +90,13 @@ class BinSearch(NZBProvider):
 
     def download(self, url = '', nzb_id = ''):
 
-        params = {'action': 'nzb'}
-        params[nzb_id] = 'on'
+        data = {
+            'action': 'nzb',
+            nzb_id: 'on'
+        }
 
         try:
-            return self.urlopen(url, params = params, show_error = False)
+            return self.urlopen(url, data = data, show_error = False)
         except:
             log.error('Failed getting nzb from %s: %s', (self.getName(), traceback.format_exc()))
 
