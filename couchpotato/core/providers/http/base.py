@@ -3,7 +3,7 @@ import time
 
 
 class HTTPProvider(YarrProvider):
-    type = 'http'
+    protocol = 'http'
 
     def calculateAge(self, unix):
         return int(time.time() - unix) / 24 / 60 / 60
