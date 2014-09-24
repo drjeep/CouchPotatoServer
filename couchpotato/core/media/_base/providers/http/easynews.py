@@ -1,18 +1,23 @@
 import os
 import requests
 import urllib
-from bs4 import BeautifulSoup
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    from BeautifulSoup import BeautifulSoup
+
 from datetime import datetime
 from dateutil import parser
 from couchpotato.core.helpers.encoding import simplifyString
 from couchpotato.core.helpers.variable import getTitle
 from couchpotato.core.logger import CPLog
-from couchpotato.core.providers.http.base import HTTPProvider
+from couchpotato.core.media._base.providers.http.base import HTTPProvider
 
 log = CPLog(__name__)
 
 
-class Easynews(HTTPProvider):
+class Base(HTTPProvider):
 
     urls = {
         'search': 'http://members.easynews.com/global5/index.html?fty[]=VIDEO&s1=dsize&s1d=-&u=1',
@@ -33,7 +38,7 @@ class Easynews(HTTPProvider):
             'score': 0
         }
         """
-        q = '%s %s %s' % (simplifyString(getTitle(movie['library'])), movie['library']['year'], quality.get('identifier'))
+        q = '%s %s %s' % (simplifyString(getTitle(movie)), movie['info']['year'], quality['identifier'])
         log.info(q)
 
         search = []
@@ -78,4 +83,32 @@ class Easynews(HTTPProvider):
             })
 
     def download(self, url='', nzb_id=''):
-        pass
+        return url
+
+
+config = [{
+    'name': 'easynews',
+    'groups': [
+        {
+            'tab': 'searcher',
+            'list': 'http_providers',
+            'name': 'Easynews',
+            'description': 'Easynews global search',
+            'wizard': True,
+            'options': [
+                {
+                    'name': 'enabled',
+                    'type': 'enabler',
+                },
+                {
+                    'name': 'username',
+                    'label': 'Username',
+                },
+                {
+                    'name': 'password',
+                    'label': 'Password',
+                },
+            ],
+        },
+    ],
+}]
