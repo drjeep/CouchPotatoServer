@@ -1,8 +1,10 @@
+import threading
+import traceback
+
 from axl.axel import Event
 from couchpotato.core.helpers.variable import mergeDicts, natsortKey
 from couchpotato.core.logger import CPLog
-import threading
-import traceback
+
 
 log = CPLog(__name__)
 events = {}
@@ -88,7 +90,7 @@ def fireEvent(name, *args, **kwargs):
 
         else:
 
-            e = Event(name = name, threads = 10, exc_info = True, traceback = True, lock = threading.RLock())
+            e = Event(name = name, threads = 10, exc_info = True, traceback = True)
 
             for event in events[name]:
                 e.handle(event['handler'], priority = event['priority'])
