@@ -35,6 +35,7 @@ class Renamer(Plugin):
             'desc': 'For the renamer to check for new files to rename in a folder',
             'params': {
                 'async': {'desc': 'Optional: Set to 1 if you dont want to fire the renamer.scan asynchronous.'},
+                'to_folder': {'desc': 'Optional: The folder to move releases to. Leave empty for default folder.'},
                 'media_folder': {'desc': 'Optional: The folder of the media to scan. Keep empty for default renamer folder.'},
                 'files': {'desc': 'Optional: Provide the release files if more releases are in the same media_folder, delimited with a \'|\'. Note that no dedicated release folder is expected for releases with one file.'},
                 'base_folder': {'desc': 'Optional: The folder to find releases in. Leave empty for default folder.'},
@@ -42,6 +43,13 @@ class Renamer(Plugin):
                 'download_id': {'desc': 'Optional: The nzb/torrent ID of the release in media_folder. \'downloader\' is required with this option.'},
                 'status': {'desc': 'Optional: The status of the release: \'completed\' (default) or \'seeding\''},
             },
+        })
+
+        addApiView('renamer.progress', self.getProgress, docs = {
+            'desc': 'Get the progress of current renamer scan',
+            'return': {'type': 'object', 'example': """{
+    'progress': False || True,
+}"""},
         })
 
         addEvent('renamer.scan', self.scan)
@@ -67,11 +75,17 @@ class Renamer(Plugin):
 
         return True
 
+    def getProgress(self, **kwargs):
+        return {
+            'progress': self.renaming_started
+        }
+
     def scanView(self, **kwargs):
 
         async = tryInt(kwargs.get('async', 0))
         base_folder = kwargs.get('base_folder')
         media_folder = sp(kwargs.get('media_folder'))
+        to_folder = kwargs.get('to_folder')
 
         # Backwards compatibility, to be removed after a few versions :)
         if not media_folder:
@@ -95,13 +109,13 @@ class Renamer(Plugin):
                 })
 
         fire_handle = fireEvent if not async else fireEventAsync
-        fire_handle('renamer.scan', base_folder = base_folder, release_download = release_download)
+        fire_handle('renamer.scan', base_folder = base_folder, release_download = release_download, to_folder = to_folder)
 
         return {
             'success': True
         }
 
-    def scan(self, base_folder = None, release_download = None):
+    def scan(self, base_folder = None, release_download = None, to_folder = None):
         if not release_download: release_download = {}
 
         if self.isDisabled():
@@ -115,7 +129,9 @@ class Renamer(Plugin):
             base_folder = sp(self.conf('from'))
 
         from_folder = sp(self.conf('from'))
-        to_folder = sp(self.conf('to'))
+
+        if not to_folder:
+            to_folder = sp(self.conf('to'))
 
         # Get media folder to process
         media_folder = sp(release_download.get('folder'))
@@ -220,10 +236,14 @@ class Renamer(Plugin):
         nfo_name = self.conf('nfo_name')
         separator = self.conf('separator')
 
-        cd_keys = ['<cd>','<cd_nr>']
+        if len(file_name) == 0:
+            log.error('Please fill in the filename option under renamer settings. Forcing it on <original>.<ext> to keep the same name as source file.')
+            file_name = '<original>.<ext>'
+
+        cd_keys = ['<cd>','<cd_nr>', '<original>']
         if not any(x in folder_name for x in cd_keys) and not any(x in file_name for x in cd_keys):
-            log.error('Missing `cd` or `cd_nr` in the renamer. This will cause multi-file releases of being renamed to the same file.'
-                      'Force adding it')
+            log.error('Missing `cd` or `cd_nr` in the renamer. This will cause multi-file releases of being renamed to the same file. '
+                      'Please add it in the renamer settings. Force adding it for now.')
             file_name = '%s %s' % ('<cd>', file_name)
 
         # Tag release folder as failed_rename in case no groups were found. This prevents check_snatched from removing the release from the downloader.
@@ -372,13 +392,6 @@ class Renamer(Plugin):
                             final_file_name = self.doReplace(trailer_name, replacements, remove_multiple = True)
                         elif file_type is 'nfo':
                             final_file_name = self.doReplace(nfo_name, replacements, remove_multiple = True)
-
-                        # Seperator replace
-                        if separator:
-                            final_file_name = final_file_name.replace(' ', separator)
-
-                        final_folder_name = ss(final_folder_name)
-                        final_file_name = ss(final_file_name)
 
                         # Move DVD files (no structure renaming)
                         if group['is_dvd'] and file_type is 'movie':
@@ -548,12 +561,13 @@ class Renamer(Plugin):
                             (not keep_original or self.fileIsAdded(current_file, group)):
                         remove_files.append(current_file)
 
-            total_space, available_space = getFreeSpace(destination)
-            renaming_size = getSize(rename_files.keys())
-            if renaming_size > available_space:
-                log.error('Not enough space left, need %s MB but only %s MB available', (renaming_size, available_space))
-                self.tagRelease(group = group, tag = 'not_enough_space')
-                continue
+            if self.conf('check_space'):
+                total_space, available_space = getFreeSpace(destination)
+                renaming_size = getSize(rename_files.keys())
+                if renaming_size > available_space:
+                    log.error('Not enough space left, need %s MB but only %s MB available', (renaming_size, available_space))
+                    self.tagRelease(group = group, tag = 'not_enough_space')
+                    continue
 
             # Remove files
             delete_folders = []
@@ -797,7 +811,7 @@ Remove it if you want it to be renamed (again, or at least let it try again)
         dest = sp(dest)
         try:
 
-            if os.path.exists(dest):
+            if os.path.exists(dest) and os.path.isfile(dest):
                 raise Exception('Destination "%s" already exists' % dest)
 
             move_type = self.conf('file_action')
@@ -871,14 +885,16 @@ Remove it if you want it to be renamed (again, or at least let it try again)
                 #If information is not available, we don't want the tag in the filename
                 replaced = replaced.replace('<' + x + '>', '')
 
-        replaced = self.replaceDoubles(replaced.lstrip('. '))
+        if self.conf('replace_doubles'):
+           replaced = self.replaceDoubles(replaced.lstrip('. '))       
+        
         for x, r in replacements.items():
             if x in ['thename', 'namethe']:
                 replaced = replaced.replace(six.u('<%s>') % toUnicode(x), toUnicode(r))
         replaced = re.sub(r"[\x00:\*\?\"<>\|]", '', replaced)
 
         sep = self.conf('foldersep') if folder else self.conf('separator')
-        return replaced.replace(' ', ' ' if not sep else sep)
+        return ss(replaced.replace(' ', ' ' if not sep else sep))
 
     def replaceDoubles(self, string):
 
@@ -1329,6 +1345,14 @@ config = [{
                     'options': rename_options
                 },
                 {
+                    'advanced': True,                
+                    'name': 'replace_doubles',
+                    'type': 'bool',
+                    'label': 'Clean Name',
+                    'description': ('Attempt to clean up double separaters due to missing data for fields.','Sometimes this eliminates wanted white space (see <a href="https://github.com/RuudBurger/CouchPotatoServer/issues/2782">#2782</a>).'),
+                    'default': True 
+                },
+                {
                     'name': 'unrar',
                     'type': 'bool',
                     'description': 'Extract rar files if found.',
@@ -1395,6 +1419,14 @@ config = [{
                     'name': 'foldersep',
                     'label': 'Folder-Separator',
                     'description': ('Replace all the spaces with a character.', 'Example: ".", "-" (without quotes). Leave empty to use spaces.'),
+                },
+                {
+                    'name': 'check_space',
+                    'label': 'Check space',
+                    'default': True,
+                    'type': 'bool',
+                    'description': ('Check if there\'s enough available space to rename the files', 'Disable when the filesystem doesn\'t return the proper value'),
+                    'advanced': True,
                 },
                 {
                     'name': 'default_file_action',

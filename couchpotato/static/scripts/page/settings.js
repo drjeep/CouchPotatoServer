@@ -560,11 +560,19 @@ Option.Password = new Class({
 	create: function(){
 		var self = this;
 
-		self.parent();
-		self.input.set('type', 'password');
+		self.el.adopt(
+			self.createLabel(),
+			self.input = new Element('input.inlay', {
+				'type': 'text',
+				'name': self.postName(),
+				'value': self.getSettingValue() ? '********' : '',
+				'placeholder': self.getPlaceholder()
+			})
+		);
 
 		self.input.addEvent('focus', function(){
-			self.input.set('value', '')
+			self.input.set('value', '');
+			self.input.set('type', 'password');
 		})
 
 	}
@@ -878,6 +886,9 @@ Option.Directory = new Class({
 				'text': 'Selected folder is empty'
 			}).inject(self.dir_list)
 
+		//fix for webkit type browsers to refresh the dom for the file browser
+		//http://stackoverflow.com/questions/3485365/how-can-i-force-webkit-to-redraw-repaint-to-propagate-style-changes
+		self.dir_list.setStyle('webkitTransform', 'scale(1)');
 		self.caretAtEnd();
 	},
 

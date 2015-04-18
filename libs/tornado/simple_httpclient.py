@@ -19,11 +19,8 @@ import functools
 import re
 import socket
 import sys
+from io import BytesIO
 
-try:
-    from io import BytesIO  # python 3
-except ImportError:
-    from cStringIO import StringIO as BytesIO  # python 2
 
 try:
     import urlparse  # py2
@@ -196,12 +193,8 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
             netloc = self.parsed.netloc
             if "@" in netloc:
                 userpass, _, netloc = netloc.rpartition("@")
-            match = re.match(r'^(.+):(\d+)$', netloc)
-            if match:
-                host = match.group(1)
-                port = int(match.group(2))
-            else:
-                host = netloc
+            host, port = httputil.split_host_and_port(netloc)
+            if port is None:
                 port = 443 if self.parsed.scheme == "https" else 80
             if re.match(r'^\[.*\]$', host):
                 # raw ipv6 addresses in urls are enclosed in brackets
@@ -222,6 +215,7 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
                     stack_context.wrap(self._on_timeout))
             self.tcp_client.connect(host, port, af=af,
                                     ssl_options=ssl_options,
+                                    max_buffer_size=self.max_buffer_size,
                                     callback=self._on_connect)
 
     def _get_ssl_options(self, scheme):
@@ -316,18 +310,18 @@ class _HTTPConnection(httputil.HTTPMessageDelegate):
         if self.request.user_agent:
             self.request.headers["User-Agent"] = self.request.user_agent
         if not self.request.allow_nonstandard_methods:
-            if self.request.method in ("POST", "PATCH", "PUT"):
-                if (self.request.body is None and
-                        self.request.body_producer is None):
-                    raise AssertionError(
-                        'Body must not be empty for "%s" request'
-                        % self.request.method)
-            else:
-                if (self.request.body is not None or
-                        self.request.body_producer is not None):
-                    raise AssertionError(
-                        'Body must be empty for "%s" request'
-                        % self.request.method)
+            # Some HTTP methods nearly always have bodies while others
+            # almost never do. Fail in this case unless the user has
+            # opted out of sanity checks with allow_nonstandard_methods.
+            body_expected = self.request.method in ("POST", "PATCH", "PUT")
+            body_present = (self.request.body is not None or
+                            self.request.body_producer is not None)
+            if ((body_expected and not body_present) or
+                (body_present and not body_expected)):
+                raise ValueError(
+                    'Body must %sbe None for method %s (unelss '
+                    'allow_nonstandard_methods is true)' %
+                    ('not ' if body_expected else '', self.request.method))
         if self.request.expect_100_continue:
             self.request.headers["Expect"] = "100-continue"
         if self.request.body is not None:

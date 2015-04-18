@@ -11,7 +11,8 @@ import traceback
 from couchpotato.core.event import fireEvent, addEvent
 from couchpotato.core.helpers.encoding import ss, toSafeString, \
     toUnicode, sp
-from couchpotato.core.helpers.variable import getExt, md5, isLocalIP, scanForPassword, tryInt, getIdentifier
+from couchpotato.core.helpers.variable import getExt, md5, isLocalIP, scanForPassword, tryInt, getIdentifier, \
+    randomString
 from couchpotato.core.logger import CPLog
 from couchpotato.environment import Env
 import requests
@@ -38,7 +39,7 @@ class Plugin(object):
 
     _locks = {}
 
-    user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.8; rv:24.0) Gecko/20130519 Firefox/24.0'
+    user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.10; rv:34.0) Gecko/20100101 Firefox/34.0'
     http_last_use = {}
     http_time_between_calls = 0
     http_failed_request = {}
@@ -192,7 +193,7 @@ class Plugin(object):
         host = '%s%s' % (parsed_url.hostname, (':' + str(parsed_url.port) if parsed_url.port else ''))
 
         headers['Referer'] = headers.get('Referer', '%s://%s' % (parsed_url.scheme, host))
-        headers['Host'] = headers.get('Host', host)
+        headers['Host'] = headers.get('Host', None)
         headers['User-Agent'] = headers.get('User-Agent', self.user_agent)
         headers['Accept-encoding'] = headers.get('Accept-encoding', 'gzip')
         headers['Connection'] = headers.get('Connection', 'keep-alive')
@@ -205,7 +206,7 @@ class Plugin(object):
             if self.http_failed_disabled[host] > (time.time() - 900):
                 log.info2('Disabled calls to %s for 15 minutes because so many failed requests.', host)
                 if not show_error:
-                    raise Exception('Disabled calls to %s for 15 minutes because so many failed requests')
+                    raise Exception('Disabled calls to %s for 15 minutes because so many failed requests' % host)
                 else:
                     return ''
             else:
@@ -278,7 +279,7 @@ class Plugin(object):
             wait = (last_use - now) + self.http_time_between_calls
 
             if wait > 0:
-                log.debug('Waiting for %s, %d seconds', (self.getName(), wait))
+                log.debug('Waiting for %s, %d seconds', (self.getName(), max(1, wait)))
                 time.sleep(min(wait, 30))
 
     def beforeCall(self, handler):
@@ -346,9 +347,9 @@ class Plugin(object):
         Env.get('cache').set(cache_key_md5, value, timeout)
         return value
 
-    def createNzbName(self, data, media):
+    def createNzbName(self, data, media, unique_tag = False):
         release_name = data.get('name')
-        tag = self.cpTag(media)
+        tag = self.cpTag(media, unique_tag = unique_tag)
 
         # Check if password is filename
         name_password = scanForPassword(data.get('name'))
@@ -361,18 +362,26 @@ class Plugin(object):
         max_length = 127 - len(tag)  # Some filesystems don't support 128+ long filenames
         return '%s%s' % (toSafeString(toUnicode(release_name)[:max_length]), tag)
 
-    def createFileName(self, data, filedata, media):
-        name = self.createNzbName(data, media)
+    def createFileName(self, data, filedata, media, unique_tag = False):
+        name = self.createNzbName(data, media, unique_tag = unique_tag)
         if data.get('protocol') == 'nzb' and 'DOCTYPE nzb' not in filedata and '</nzb>' not in filedata:
             return '%s.%s' % (name, 'rar')
         return '%s.%s' % (name, data.get('protocol'))
 
-    def cpTag(self, media):
-        if Env.setting('enabled', 'renamer'):
-            identifier = getIdentifier(media)
-            return '.cp(' + identifier + ')' if identifier else ''
+    def cpTag(self, media, unique_tag = False):
 
-        return ''
+        tag = ''
+        if Env.setting('enabled', 'renamer') or unique_tag:
+            identifier = getIdentifier(media) or ''
+            unique_tag = ', ' + randomString() if unique_tag else ''
+
+            tag = '.cp('
+            tag += identifier
+            tag += ', ' if unique_tag and identifier else ''
+            tag += randomString() if unique_tag else ''
+            tag += ')'
+
+        return tag if len(tag) > 7 else ''
 
     def checkFilesChanged(self, files, unchanged_for = 60):
         now = time.time()
