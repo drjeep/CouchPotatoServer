@@ -25,35 +25,18 @@ class Base(TorrentMagnetProvider):
     http_time_between_calls = 0
 
     proxy_list = [
-        'https://thepiratebay.mn',
-        'https://thepiratebay.gd',
-        'https://thepiratebay.la',
-        'https://pirateproxy.sx',
-        'https://piratebay.host',
-        'https://thepiratebay.expert',
+        'https://pirateproxy.cat',
         'https://pirateproxy.wf',
         'https://pirateproxy.tf',
         'https://urbanproxy.eu',
-        'https://pirate.guru',
         'https://piratebays.co',
         'https://pirateproxy.yt',
         'https://thepiratebay.uk.net',
-        'https://tpb.ninja',
-        'https://thehiddenbay.me',
-        'https://ukunlocked.com',
         'https://thebay.tv',
-        'https://tpb.freed0m4all.net',
-        'https://piratebays.eu',
         'https://thepirateproxy.co',
-        'https://thepiratebayz.com',
-        'https://zaatoka.eu',
-        'https://piratemirror.net',
         'https://theproxypirate.pw',
-        'https://torrentdr.com',
-        'https://tpbproxy.co',
         'https://arrr.xyz',
-        'https://www.cleantpbproxy.com',
-        'http://tpb.dashitz.com',
+        'https://tpb.dashitz.com'
     ]
 
     def __init__(self):
@@ -101,6 +84,13 @@ class Base(TorrentMagnetProvider):
                             continue
 
                         if link and download:
+                            if self.conf('trusted_only'):
+                                if result.find('img', alt = re.compile('Trusted')) is None and \
+                                                result.find('img', alt = re.compile('VIP')) is None and \
+                                                result.find('img', alt = re.compile('Helpers')) is None and \
+                                                result.find('img', alt = re.compile('Moderator')) is None:
+                                    log.info('Skipped torrent %s, untrusted.' % link.string)
+                                    continue
 
                             def extra_score(item):
                                 trusted = (0, 10)[result.find('img', alt = re.compile('Trusted')) is not None]
@@ -200,6 +190,14 @@ config = [{
                     'type': 'int',
                     'default': 0,
                     'description': 'Starting score for each release found via this provider.',
+                },
+                {
+                    'name': 'trusted_only',
+                    'advanced': True,
+                    'label': 'Trusted/VIP Only',
+                    'type': 'bool',
+                    'default': False,
+                    'description': 'Only download releases marked as Trusted or VIP'
                 }
             ],
         }

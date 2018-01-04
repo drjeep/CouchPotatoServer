@@ -1,12 +1,14 @@
 import random
 import traceback
+import itertools
 from base64 import b64decode as bd
 
 from couchpotato.core.event import addEvent, fireEvent
 from couchpotato.core.helpers.encoding import toUnicode, ss, tryUrlencode
-from couchpotato.core.helpers.variable import tryInt
+from couchpotato.core.helpers.variable import tryInt, splitString
 from couchpotato.core.logger import CPLog
 from couchpotato.core.media.movie.providers.base import MovieProvider
+from couchpotato.environment import Env
 
 log = CPLog(__name__)
 
@@ -26,6 +28,9 @@ class TheMovieDb(MovieProvider):
     ak = ['ZjdmNTE3NzU4NzdlMGJiNjcwMzUyMDk1MmIzYzc4NDA=', 'ZTIyNGZlNGYzZmVjNWY3YjU1NzA2NDFmN2NkM2RmM2E=',
           'YTNkYzExMWU2NjEwNWY2Mzg3ZTk5MzkzODEzYWU0ZDU=', 'ZjZiZDY4N2ZmYTYzY2QyODJiNmZmMmM2ODc3ZjI2Njk=']
 
+    languages = [ 'en' ]
+    default_language = 'en'
+
     def __init__(self):
         addEvent('info.search', self.search, priority = 3)
         addEvent('movie.search', self.search, priority = 3)
@@ -38,6 +43,21 @@ class TheMovieDb(MovieProvider):
         # Reset invalid key
         if self.conf('api_key') == '9b939aee0aaafc12a65bf448e4af9543':
             self.conf('api_key', '')
+
+        languages = self.getLanguages()
+
+        # languages should never be empty, the first language is the default language used for all the description details
+        self.default_language = languages[0]
+
+        # en is always downloaded and it is the fallback
+        if 'en' in languages:
+            languages.remove('en')
+
+        # default language has a special management
+        if self.default_language in languages:
+            languages.remove(self.default_language)
+
+        self.languages = languages
 
         configuration = self.request('configuration')
         if configuration:
@@ -100,10 +120,23 @@ class TheMovieDb(MovieProvider):
 
         # Do request, append other items
         movie = self.request('movie/%s' % movie.get('id'), {
-            'append_to_response': 'alternative_titles' + (',images,casts' if extended else '')
+            'append_to_response': 'alternative_titles' + (',images,casts' if extended else ''),
+            'language': 'en'
         })
         if not movie:
             return
+
+        movie_default = movie if self.default_language == 'en' else self.request('movie/%s' % movie.get('id'), {
+            'append_to_response': 'alternative_titles' + (',images,casts' if extended else ''),
+			'language': self.default_language
+        })
+
+        movie_default = movie_default or movie
+
+        movie_others = [ self.request('movie/%s' % movie.get('id'), {
+            'append_to_response': 'alternative_titles' + (',images,casts' if extended else ''),
+			'language': language
+        }) for language in self.languages] if self.languages else []
 
         # Images
         poster = self.getImage(movie, type = 'poster', size = 'w154')
@@ -149,14 +182,14 @@ class TheMovieDb(MovieProvider):
             'type': 'movie',
             'via_tmdb': True,
             'tmdb_id': movie.get('id'),
-            'titles': [toUnicode(movie.get('title'))],
+            'titles': [toUnicode(movie_default.get('title') or movie.get('title'))],
             'original_title': movie.get('original_title'),
             'images': images,
             'imdb': movie.get('imdb_id'),
             'runtime': movie.get('runtime'),
             'released': str(movie.get('release_date')),
             'year': tryInt(year, None),
-            'plot': movie.get('overview'),
+            'plot': movie_default.get('overview') or movie.get('overview'),
             'genres': genres,
             'collection': getattr(movie.get('belongs_to_collection'), 'name', None),
             'actor_roles': actors
@@ -165,16 +198,18 @@ class TheMovieDb(MovieProvider):
         movie_data = dict((k, v) for k, v in movie_data.items() if v)
 
         # Add alternative names
-        if movie_data['original_title'] and movie_data['original_title'] not in movie_data['titles']:
-            movie_data['titles'].append(movie_data['original_title'])
+        movies = [ movie ] + movie_others if movie == movie_default else [ movie, movie_default ] + movie_others
+        movie_titles = [ self.getTitles(movie) for movie in movies ]
 
-        # Add alternative titles
-        alternate_titles = movie.get('alternative_titles', {}).get('titles', [])
+        all_titles = sorted(list(itertools.chain.from_iterable(movie_titles)))
 
-        for alt in alternate_titles:
-            alt_name = alt.get('title')
-            if alt_name and alt_name not in movie_data['titles'] and alt_name.lower() != 'none' and alt_name is not None:
-                movie_data['titles'].append(alt_name)
+        alternate_titles = movie_data['titles']
+
+        for title in all_titles:
+            if title and title not in alternate_titles and title.lower() != 'none' and title is not None:
+                alternate_titles.append(title)
+
+        movie_data['titles'] = alternate_titles
 
         return movie_data
 
@@ -227,6 +262,35 @@ class TheMovieDb(MovieProvider):
     def getApiKey(self):
         key = self.conf('api_key')
         return bd(random.choice(self.ak)) if key == '' else key
+
+    def getLanguages(self):
+        languages = splitString(Env.setting('languages', section = 'core'))
+        if len(languages):
+            return languages
+
+        return [ 'en' ]
+
+    def getTitles(self, movie):
+        # add the title to the list
+        title = toUnicode(movie.get('title'))
+
+        titles = [title] if title else []
+
+        # add the original_title to the list
+        alternate_title = toUnicode(movie.get('original_title'))
+
+        if alternate_title and alternate_title not in titles:
+            titles.append(alternate_title)
+
+        # Add alternative titles
+        alternate_titles = movie.get('alternative_titles', {}).get('titles', [])
+
+        for alt in alternate_titles:
+            alt_name = toUnicode(alt.get('title'))
+            if alt_name and alt_name not in titles and alt_name.lower() != 'none' and alt_name is not None:
+                titles.append(alt_name)
+
+        return titles;
 
 
 config = [{
